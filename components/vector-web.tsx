@@ -8,11 +8,12 @@ import * as THREE from "three";
 
 import { buildConstellation, type WebEdge } from "@/lib/constellation";
 import { nearestK, type GridIndex } from "@/lib/spatial";
-import { useVectorStore } from "@/lib/store";
+import { isClusterVisible, useVectorStore } from "@/lib/store";
 
 const VERTEX = /* glsl */ `
 attribute float aIndex;
 attribute float aSize;
+attribute float aVisible;
 uniform float uBaseSize;
 uniform float uPerspScale;
 uniform float uOrthoZoom;
@@ -21,9 +22,16 @@ uniform float uPixelRatio;
 uniform float uPicking;
 varying vec3 vColor;
 varying float vIndex;
+varying float vVisible;
 void main() {
   vIndex = aIndex;
   vColor = color;
+  vVisible = aVisible;
+  if (aVisible < 0.5) {
+    gl_PointSize = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   float px = uIsOrtho > 0.5
     ? uBaseSize * uOrthoZoom
@@ -39,7 +47,9 @@ const FRAGMENT = /* glsl */ `
 uniform float uPicking;
 varying vec3 vColor;
 varying float vIndex;
+varying float vVisible;
 void main() {
+  if (vVisible < 0.5) discard;
   vec2 uv = gl_PointCoord * 2.0 - 1.0;
   float d = length(uv);
   if (uPicking > 0.5) {
@@ -104,6 +114,10 @@ export function makePointsGeometry(
   geometry.setAttribute(
     "aSize",
     new THREE.BufferAttribute(sizes ?? new Float32Array(count).fill(1), 1),
+  );
+  geometry.setAttribute(
+    "aVisible",
+    new THREE.BufferAttribute(new Float32Array(count).fill(1), 1),
   );
   geometry.computeBoundingSphere();
   return geometry;
@@ -239,6 +253,9 @@ export function BackgroundWeb({
   count: number;
   extent: number;
 }) {
+  const clusters = useVectorStore((s) => s.cloud?.clusters);
+  const selectedClusters = useVectorStore((s) => s.selectedClusters);
+
   const built = useMemo(() => {
     if (count < 2 || extent <= 0) return null;
     return buildConstellation(positions, count, extent);
@@ -246,8 +263,16 @@ export function BackgroundWeb({
 
   const geometry = useMemo(() => {
     if (!built) return null;
-    return makeEdgeGeometry(positions, colors, built.edges, built.maxDist);
-  }, [built, positions, colors]);
+    const edges =
+      selectedClusters === null || !clusters
+        ? built.edges
+        : built.edges.filter(
+            (e) =>
+              isClusterVisible(selectedClusters, clusters[e.i]) &&
+              isClusterVisible(selectedClusters, clusters[e.j]),
+          );
+    return makeEdgeGeometry(positions, colors, edges, built.maxDist);
+  }, [built, positions, colors, clusters, selectedClusters]);
 
   useEffect(() => () => geometry?.dispose(), [geometry]);
 
@@ -265,16 +290,20 @@ export function HoverWeb({
 }) {
   const hoverIndex = useVectorStore((s) => s.hoverIndex);
   const cloud = useVectorStore((s) => s.cloud);
+  const selectedClusters = useVectorStore((s) => s.selectedClusters);
   const material = useMemo(() => makePointsMaterial(), []);
   const pulseRef = useRef<THREE.Mesh>(null);
 
   const local = useMemo(() => {
     if (!index || !cloud || hoverIndex === null) return null;
+    if (!isClusterVisible(selectedClusters, cloud.clusters[hoverIndex])) return null;
     const x = cloud.positions[hoverIndex * 3];
     const y = cloud.positions[hoverIndex * 3 + 1];
     const z = cloud.positions[hoverIndex * 3 + 2];
     const nbrs = nearestK(index, x, y, z, 14, extent * 0.12).filter(
-      (n) => n.idx !== hoverIndex,
+      (n) =>
+        n.idx !== hoverIndex &&
+        isClusterVisible(selectedClusters, cloud.clusters[n.idx]),
     );
     if (nbrs.length === 0) return { origin: [x, y, z] as [number, number, number], nbrs, arcs: null, nodes: null };
     const arcs = makeArcGeometry(
@@ -312,7 +341,7 @@ export function HoverWeb({
       arcs,
       nodes: makePointsGeometry(nodePos, nodeCol, nbrs.length + 1),
     };
-  }, [index, cloud, hoverIndex, extent]);
+  }, [index, cloud, hoverIndex, extent, selectedClusters]);
 
   useFrame(({ gl, camera, size, clock }) => {
     syncPointUniforms(material, gl, camera, size.height, baseSize * 2.1);

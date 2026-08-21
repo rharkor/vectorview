@@ -4,6 +4,7 @@ import { Database, KeyRound, Orbit, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect } from "react";
 
+import { ClusterLegend } from "@/components/cluster-legend";
 import { DatasetDialog } from "@/components/dataset-dialog";
 import { DetailsPanel } from "@/components/details-panel";
 import { SearchBar } from "@/components/search-bar";
@@ -143,6 +144,10 @@ python scripts/project.py    # compute x/y/z`}
           </p>
         </div>
       )}
+
+      <div className="pointer-events-none absolute top-32 left-4 z-10">
+        <ClusterLegend />
+      </div>
 
       {/* Footer */}
       <div className="absolute bottom-4 left-4 z-10">

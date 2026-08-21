@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 
+import type { ClusterColorMap } from "@/lib/colors";
 import type { PointRow, SearchResult, ViewMode } from "@/lib/types";
 
 export interface PointCloud {
@@ -9,6 +10,8 @@ export interface PointCloud {
   labels: string[]; // optional display label per point ("" when unset)
   positions: Float32Array; // interleaved xyz
   colors: Uint8Array; // rgba per point
+  clusters: Int32Array; // category id per point; -1 = none
+  clusterColors: ClusterColorMap;
   count: number;
 }
 
@@ -51,6 +54,9 @@ interface VectorState {
 
   datasetDialogOpen: boolean;
   dataVersion: number;
+  /** `null` = every cluster visible; otherwise only these ids are shown. */
+  selectedClusters: Set<number> | null;
+  clusterLabels: Record<string, string>;
 
   setCloud: (cloud: PointCloud, total: number, rendered: number) => void;
   setLoading: (loading: boolean, progress?: number | null) => void;
@@ -72,6 +78,16 @@ interface VectorState {
   setTokenDialogOpen: (open: boolean) => void;
   setDatasetDialogOpen: (open: boolean) => void;
   bumpDataVersion: () => void;
+  selectCluster: (id: number) => void;
+  showAllClusters: () => void;
+  setClusterLabels: (labels: Record<string, string>) => void;
+}
+
+export function isClusterVisible(
+  selected: Set<number> | null,
+  id: number,
+): boolean {
+  return selected === null || selected.has(id);
 }
 
 export const useVectorStore = create<VectorState>((set) => ({
@@ -106,9 +122,19 @@ export const useVectorStore = create<VectorState>((set) => ({
 
   datasetDialogOpen: false,
   dataVersion: 0,
+  selectedClusters: null,
+  clusterLabels: {},
 
   setCloud: (cloud, totalCount, renderedCount) =>
-    set({ cloud, totalCount, renderedCount, loading: false, loadProgress: null, error: null }),
+    set({
+      cloud,
+      totalCount,
+      renderedCount,
+      loading: false,
+      loadProgress: null,
+      error: null,
+      selectedClusters: null,
+    }),
   setLoading: (loading, progress = null) => set({ loading, loadProgress: progress }),
   setError: (error) => set({ error, loading: false, loadProgress: null }),
   setViewMode: (viewMode) => set({ viewMode }),
@@ -144,6 +170,20 @@ export const useVectorStore = create<VectorState>((set) => ({
   setTokenDialogOpen: (tokenDialogOpen) => set({ tokenDialogOpen }),
   setDatasetDialogOpen: (datasetDialogOpen) => set({ datasetDialogOpen }),
   bumpDataVersion: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),
+  selectCluster: (id) =>
+    set((s) => {
+      const current = s.selectedClusters;
+      if (current === null) return { selectedClusters: new Set([id]) };
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+        return { selectedClusters: next.size === 0 ? null : next };
+      }
+      next.add(id);
+      return { selectedClusters: next };
+    }),
+  showAllClusters: () => set({ selectedClusters: null }),
+  setClusterLabels: (clusterLabels) => set({ clusterLabels }),
 }));
 
 if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {

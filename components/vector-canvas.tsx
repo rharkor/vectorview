@@ -24,9 +24,9 @@ import {
   setPicking,
   syncPointUniforms,
 } from "@/components/vector-web";
-import { clusterColor } from "@/lib/colors";
+import { buildClusterColors, clusterColor } from "@/lib/colors";
 import { buildGrid, queryRadius, type GridIndex } from "@/lib/spatial";
-import { useVectorStore } from "@/lib/store";
+import { isClusterVisible, useVectorStore } from "@/lib/store";
 
 type OrbitControlsImpl = React.ComponentRef<typeof OrbitControls>;
 
@@ -302,6 +302,7 @@ export function VectorCanvas() {
         const n = ids.length;
         const positions = new Float32Array(n * 3);
         const colors = new Uint8Array(n * 4);
+        const clusterColors = buildClusterColors(clusters, n);
 
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         for (let i = 0; i < n; i++) {
@@ -309,7 +310,7 @@ export function VectorCanvas() {
           positions[i * 3] = x;
           positions[i * 3 + 1] = y;
           positions[i * 3 + 2] = z;
-          const [r, g, b] = clusterColor(clusters[i]);
+          const [r, g, b] = clusterColor(clusters[i], clusterColors);
           colors[i * 4] = r;
           colors[i * 4 + 1] = g;
           colors[i * 4 + 2] = b;
@@ -320,7 +321,19 @@ export function VectorCanvas() {
           if (y > maxY) maxY = y;
         }
 
-        setCloud({ ids, labels, positions, colors, count: n }, total, n);
+        setCloud(
+          {
+            ids,
+            labels,
+            positions,
+            colors,
+            clusters: Int32Array.from(clusters),
+            clusterColors,
+            count: n,
+          },
+          total,
+          n,
+        );
 
         if (n > 0) {
           const extentX = Math.max(maxX - minX, 1e-6);
@@ -359,6 +372,17 @@ export function VectorCanvas() {
   }, [cloud]);
 
   useEffect(() => () => geometry?.dispose(), [geometry]);
+
+  const selectedClusters = useVectorStore((s) => s.selectedClusters);
+  useEffect(() => {
+    if (!geometry || !cloud) return;
+    const attr = geometry.getAttribute("aVisible") as THREE.BufferAttribute | undefined;
+    if (!attr) return;
+    for (let i = 0; i < cloud.count; i++) {
+      attr.setX(i, isClusterVisible(selectedClusters, cloud.clusters[i]) ? 1 : 0);
+    }
+    attr.needsUpdate = true;
+  }, [geometry, cloud, selectedClusters]);
 
   const gpuPick = useCallback(
     (state: RootState, cssX: number, cssY: number): number => {
@@ -421,13 +445,17 @@ export function VectorCanvas() {
         seedZ = cloud.positions[gpu * 3 + 2];
       }
 
-      const nearby = index
-        ? queryRadius(index, seedX, seedY, seedZ, radius)
-        : gpu >= 0
-          ? [{ idx: gpu, dist: 0 }]
-          : [];
+      const visible = (idx: number) =>
+        isClusterVisible(selectedClusters, cloud.clusters[idx]);
+      const nearby = (
+        index
+          ? queryRadius(index, seedX, seedY, seedZ, radius)
+          : gpu >= 0
+            ? [{ idx: gpu, dist: 0 }]
+            : []
+      ).filter((h) => visible(h.idx));
 
-      if (gpu >= 0 && !nearby.some((h) => h.idx === gpu)) {
+      if (gpu >= 0 && visible(gpu) && !nearby.some((h) => h.idx === gpu)) {
         nearby.push({ idx: gpu, dist: 0 });
       }
 
@@ -466,7 +494,7 @@ export function VectorCanvas() {
         .map((h) => h.idx);
       return stacked.length > 0 ? stacked : [primary];
     },
-    [baseSize, cloud, extent, gpuPick, index],
+    [baseSize, cloud, extent, gpuPick, index, selectedClusters],
   );
 
   const hideHover = useCallback(() => {

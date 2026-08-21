@@ -38,7 +38,66 @@ export const CLUSTER_PALETTE: [number, number, number][] = Array.from(
 
 export const UNCLUSTERED_COLOR: [number, number, number] = [56, 189, 248];
 
-export function clusterColor(cluster: number): [number, number, number] {
+export type ClusterColorMap = Record<string, [number, number, number]>;
+
+/** Base-2 van der Corput: 0, 0.5, 0.25, 0.75, 0.125… so nearby ranks sit far apart on the wheel. */
+function vanDerCorput2(n: number): number {
+  let inv = 0;
+  let denom = 1;
+  while (n > 0) {
+    denom *= 2;
+    inv += (n % 2) / denom;
+    n = Math.floor(n / 2);
+  }
+  return inv;
+}
+
+function colorForSizeRank(rank: number): [number, number, number] {
+  const hue = vanDerCorput2(rank) * 360;
+  const light = 0.74 + (rank % 2 === 0 ? 0.05 : -0.05);
+  const chroma = rank < 8 ? 0.22 : 0.16;
+  return oklchToRgb(light, chroma, hue);
+}
+
+/** Color map keyed by cluster id. Largest clusters get the most separated hues. */
+export function buildClusterColors(
+  clusters: ArrayLike<number>,
+  count: number,
+): ClusterColorMap {
+  const counts = new Map<number, number>();
+  for (let i = 0; i < count; i++) {
+    const id = clusters[i];
+    if (id < 0) continue;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+  const colors: ClusterColorMap = {};
+  for (let i = 0; i < ranked.length; i++) {
+    colors[String(ranked[i][0])] = colorForSizeRank(i);
+  }
+  return colors;
+}
+
+export function clusterColor(
+  cluster: number,
+  colors?: ClusterColorMap,
+): [number, number, number] {
   if (cluster < 0) return UNCLUSTERED_COLOR;
-  return CLUSTER_PALETTE[cluster % PALETTE_SIZE];
+  return colors?.[String(cluster)] ?? CLUSTER_PALETTE[cluster % PALETTE_SIZE];
+}
+
+export function clusterRgbCss(
+  cluster: number,
+  colors?: ClusterColorMap,
+): string {
+  const [r, g, b] = clusterColor(cluster, colors);
+  return `rgb(${r} ${g} ${b})`;
+}
+
+export function clusterLabel(
+  cluster: number,
+  labels?: Record<string, string>,
+): string {
+  if (cluster < 0) return "Unclustered";
+  return labels?.[String(cluster)] ?? String(cluster);
 }

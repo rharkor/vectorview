@@ -227,15 +227,49 @@ export async function POST(request: Request) {
       await sql`CREATE INDEX IF NOT EXISTS items_xy_idx ON items (x, y)`;
       await sql`ANALYZE items`;
 
-      await sql`
-        INSERT INTO dataset_meta (id, source_label, source_table, embedding_dim, imported_at)
-        VALUES (1, ${redactUrl(body.url)}, ${`${body.schema}.${body.table}`}, ${dims}, now())
-        ON CONFLICT (id) DO UPDATE SET
-          source_label = EXCLUDED.source_label,
-          source_table = EXCLUDED.source_table,
-          embedding_dim = EXCLUDED.embedding_dim,
-          imported_at = EXCLUDED.imported_at
-      `;
+      const clusterLabels: Record<string, string> = {};
+      if (clusterMap.size > 0) {
+        for (const [name, id] of clusterMap) clusterLabels[String(id)] = name;
+      } else if (body.clusterColumn) {
+        const distinct = await sql<{ cluster: number }[]>`
+          SELECT DISTINCT cluster FROM items WHERE cluster IS NOT NULL
+        `;
+        for (const row of distinct) clusterLabels[String(row.cluster)] = String(row.cluster);
+      }
+
+      try {
+        await sql`
+          INSERT INTO dataset_meta (id, source_label, source_table, embedding_dim, imported_at, cluster_labels, cluster_column)
+          VALUES (
+            1,
+            ${redactUrl(body.url)},
+            ${`${body.schema}.${body.table}`},
+            ${dims},
+            now(),
+            ${sql.json(clusterLabels)},
+            ${body.clusterColumn ?? null}
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            source_label = EXCLUDED.source_label,
+            source_table = EXCLUDED.source_table,
+            embedding_dim = EXCLUDED.embedding_dim,
+            imported_at = EXCLUDED.imported_at,
+            cluster_labels = EXCLUDED.cluster_labels,
+            cluster_column = EXCLUDED.cluster_column
+        `;
+      } catch (error) {
+        const code = typeof error === "object" && error && "code" in error ? error.code : null;
+        if (code !== "42703") throw error;
+        await sql`
+          INSERT INTO dataset_meta (id, source_label, source_table, embedding_dim, imported_at)
+          VALUES (1, ${redactUrl(body.url)}, ${`${body.schema}.${body.table}`}, ${dims}, now())
+          ON CONFLICT (id) DO UPDATE SET
+            source_label = EXCLUDED.source_label,
+            source_table = EXCLUDED.source_table,
+            embedding_dim = EXCLUDED.embedding_dim,
+            imported_at = EXCLUDED.imported_at
+        `;
+      }
 
       invalidatePointsCache();
       await send({ phase: "done", rows: copied, dims });
