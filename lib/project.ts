@@ -25,7 +25,6 @@ interface ProjectOptions {
 }
 
 function parseVector(text: string): number[] {
-  // pgvector text format: "[1,2,3]"
   const out: number[] = [];
   let start = 1;
   const len = text.length - 1;
@@ -38,18 +37,30 @@ function parseVector(text: string): number[] {
   return out;
 }
 
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function strideFor(n: number, want: number): number {
+  return Math.max(1, Math.floor(n / Math.max(want, 1)));
+}
+
 /**
- * Project the internal `items` embeddings to x/y/z in place:
- * PCA (fit on a sample, transform in batches) -> UMAP -> staged write-back.
+ * Project `items` embeddings to x/y/z:
+ * PCA (fit on a sample, transform in batches into a staging table) → UMAP
+ * on a bounded subset → transform the rest → write-back.
+ *
+ * Intermediate PCA components live in Postgres so Node memory stays bounded
+ * for large imports.
  */
 export async function projectItems(
   sql: postgres.Sql,
   options: ProjectOptions = {},
 ): Promise<{ rows: number; dims: number }> {
   const components = options.components ?? 3;
-  const pcaSampleSize = options.pcaSampleSize ?? 10_000;
-  const umapFitMax = options.umapFitMax ?? 100_000;
-  const batchSize = options.batchSize ?? 5_000;
+  const pcaSampleSize = options.pcaSampleSize ?? 8_000;
+  const umapFitMax = options.umapFitMax ?? 12_000;
+  const batchSize = options.batchSize ?? 1_500;
   const onProgress = options.onProgress ?? (() => {});
 
   const [{ count }] = await sql<{ count: string }[]>`
@@ -58,127 +69,168 @@ export async function projectItems(
   const n = Number(count);
   if (n === 0) throw new Error("No embeddings to project");
 
-  // --- PCA fit on a random sample -------------------------------------
+  await sql`
+    CREATE UNLOGGED TABLE IF NOT EXISTS projection_pca (
+      id bigint PRIMARY KEY,
+      comps jsonb NOT NULL
+    )
+  `;
+  await sql`TRUNCATE projection_pca`;
+  await sql`TRUNCATE projection_writeback`;
+
   onProgress({ phase: "pca-fit", done: 0, total: 1 });
+  const sampleLimit = Math.min(pcaSampleSize, n);
   const sampleRows = await sql<{ emb: string }[]>`
     SELECT embedding::text AS emb FROM items
-    WHERE embedding IS NOT NULL
-    ORDER BY random() LIMIT ${Math.min(pcaSampleSize, n)}
+    WHERE embedding IS NOT NULL AND id % ${strideFor(n, sampleLimit)} = 0
+    ORDER BY id
+    LIMIT ${sampleLimit}
   `;
-  const sample = sampleRows.map((r) => parseVector(r.emb));
+  let sample = sampleRows
+    .map((r) => parseVector(r.emb))
+    .filter((v) => v.length > 0 && v.every(Number.isFinite));
+  if (sample.length < Math.min(32, n)) {
+    const extra = await sql<{ emb: string }[]>`
+      SELECT embedding::text AS emb FROM items
+      WHERE embedding IS NOT NULL
+      ORDER BY id
+      LIMIT ${sampleLimit}
+    `;
+    sample = extra
+      .map((r) => parseVector(r.emb))
+      .filter((v) => v.length > 0 && v.every(Number.isFinite));
+  }
   const dims = sample[0]?.length ?? 0;
-  if (dims === 0) throw new Error("Could not read embeddings");
-  const pcaDims = Math.min(options.pcaDims ?? 50, dims, sample.length);
+  if (dims === 0 || sample.length < 2) throw new Error("Could not read embeddings");
+  const pcaDims = Math.min(options.pcaDims ?? 40, dims, sample.length);
   const pca = new PCA(sample, { center: true, scale: false });
   onProgress({ phase: "pca-fit", done: 1, total: 1 });
 
-  // --- PCA transform all rows (streamed) -------------------------------
-  const ids = new Float64Array(n);
-  const reduced = new Float32Array(n * pcaDims);
-  let offset = 0;
-  await sql`
+  let transformed = 0;
+  const pcaCursor = sql<{ id: string; emb: string }[]>`
     SELECT id, embedding::text AS emb FROM items
-    WHERE embedding IS NOT NULL ORDER BY id
-  `.cursor(batchSize, (rows) => {
-    const batch = rows.map((r) => parseVector(r.emb as string));
+    WHERE embedding IS NOT NULL
+    ORDER BY id
+  `.cursor(batchSize);
+  for await (const rows of pcaCursor) {
+    const batch = rows.map((r) => parseVector(r.emb));
     const out = pca.predict(batch, { nComponents: pcaDims }).to2DArray();
-    for (let i = 0; i < rows.length; i++) {
-      ids[offset + i] = Number(rows[i].id);
-      for (let j = 0; j < pcaDims; j++) {
-        reduced[(offset + i) * pcaDims + j] = out[i][j];
-      }
-    }
-    offset += rows.length;
-    onProgress({ phase: "pca-transform", done: offset, total: n });
-  });
+    const staged = rows.map((r, i) => ({
+      id: Number(r.id),
+      comps: sql.json(out[i].slice(0, pcaDims)),
+    }));
+    await sql`INSERT INTO projection_pca ${sql(staged, "id", "comps")}`;
+    transformed += rows.length;
+    onProgress({ phase: "pca-transform", done: transformed, total: n });
+    await yieldToEventLoop();
+  }
 
-  // --- UMAP --------------------------------------------------------------
-  const nEpochs = n > 10_000 ? 200 : 500;
+  if (n < 8) {
+    await writePcaAsCoords(sql, components, pcaDims);
+    return { rows: n, dims };
+  }
+
+  const fitCount = Math.min(n, umapFitMax);
+  const fitRows = await sql<{ id: string; comps: number[] }[]>`
+    SELECT id, comps FROM projection_pca
+    WHERE id % ${strideFor(n, fitCount)} = 0
+    ORDER BY id
+    LIMIT ${fitCount}
+  `;
+  const fitData = fitRows.map((r) => r.comps.map(Number));
+  if (fitData.length < 3) {
+    await writePcaAsCoords(sql, components, pcaDims);
+    return { rows: n, dims };
+  }
+
+  const nEpochs = n > 10_000 ? 150 : 400;
   const umap = new UMAP({
     nComponents: components,
-    nNeighbors: Math.min(15, n - 1),
+    nNeighbors: Math.min(15, fitData.length - 1),
     minDist: 0.1,
     nEpochs,
   });
-
-  const coords = new Float32Array(n * components);
-  const fitCount = Math.min(n, umapFitMax);
-  let fitIndices: Uint32Array;
-  if (fitCount === n) {
-    fitIndices = new Uint32Array(n);
-    for (let i = 0; i < n; i++) fitIndices[i] = i;
-  } else {
-    fitIndices = new Uint32Array(fitCount);
-    const chosen = new Set<number>();
-    while (chosen.size < fitCount) chosen.add(Math.floor(Math.random() * n));
-    let i = 0;
-    for (const idx of chosen) fitIndices[i++] = idx;
-    fitIndices.sort();
-  }
-
-  const fitData: number[][] = new Array(fitCount);
-  for (let i = 0; i < fitCount; i++) {
-    const idx = fitIndices[i];
-    fitData[i] = Array.from(reduced.subarray(idx * pcaDims, (idx + 1) * pcaDims));
-  }
-
   const fitEmbedding = await umap.fitAsync(fitData, (epoch) => {
     onProgress({ phase: "umap-fit", done: epoch, total: nEpochs });
   });
-  for (let i = 0; i < fitCount; i++) {
-    const idx = fitIndices[i];
-    for (let c = 0; c < components; c++) {
-      coords[idx * components + c] = fitEmbedding[i][c];
-    }
-  }
+
+  const fitIds = new Set(fitRows.map((r) => Number(r.id)));
+  const fitWrite = fitRows.map((r, i) => ({
+    id: Number(r.id),
+    x: fitEmbedding[i][0],
+    y: fitEmbedding[i][1],
+    z: components >= 3 ? fitEmbedding[i][2] : 0,
+  }));
+  await sql`INSERT INTO projection_writeback ${sql(fitWrite, "id", "x", "y", "z")}`;
 
   if (fitCount < n) {
-    // Transform the remaining rows in batches.
-    const rest: number[] = [];
-    const inFit = new Uint8Array(n);
-    for (const idx of fitIndices) inFit[idx] = 1;
-    for (let i = 0; i < n; i++) if (!inFit[i]) rest.push(i);
-
-    for (let start = 0; start < rest.length; start += batchSize) {
-      const slice = rest.slice(start, start + batchSize);
-      const batch = slice.map((idx) =>
-        Array.from(reduced.subarray(idx * pcaDims, (idx + 1) * pcaDims)),
-      );
-      const out = umap.transform(batch);
-      for (let i = 0; i < slice.length; i++) {
-        for (let c = 0; c < components; c++) {
-          coords[slice[i] * components + c] = out[i][c];
-        }
+    let done = 0;
+    const restTotal = n - fitRows.length;
+    const restCursor = sql<{ id: string; comps: number[] }[]>`
+      SELECT id, comps FROM projection_pca ORDER BY id
+    `.cursor(batchSize);
+    for await (const rows of restCursor) {
+      const slice = rows.filter((r) => !fitIds.has(Number(r.id)));
+      if (slice.length === 0) continue;
+      const batch = slice.map((r) => r.comps.map(Number));
+      let write: { id: number; x: number; y: number; z: number }[];
+      try {
+        const out = umap.transform(batch);
+        write = slice.map((r, i) => ({
+          id: Number(r.id),
+          x: out[i][0],
+          y: out[i][1],
+          z: components >= 3 ? out[i][2] : 0,
+        }));
+      } catch {
+        write = slice.map((r) => ({
+          id: Number(r.id),
+          x: Number(r.comps[0] ?? 0),
+          y: Number(r.comps[1] ?? 0),
+          z: components >= 3 ? Number(r.comps[2] ?? 0) : 0,
+        }));
       }
+      await sql`INSERT INTO projection_writeback ${sql(write, "id", "x", "y", "z")}`;
+      done += slice.length;
       onProgress({
         phase: "umap-transform",
-        done: Math.min(start + batchSize, rest.length),
-        total: rest.length,
+        done: Math.min(done, restTotal),
+        total: restTotal,
       });
+      await yieldToEventLoop();
     }
   }
 
-  // --- Write back via staging table --------------------------------------
-  await sql`TRUNCATE projection_writeback`;
-  for (let start = 0; start < n; start += batchSize) {
-    const end = Math.min(start + batchSize, n);
-    const rows: { id: number; x: number; y: number; z: number }[] = new Array(end - start);
-    for (let i = start; i < end; i++) {
-      rows[i - start] = {
-        id: ids[i],
-        x: coords[i * components],
-        y: coords[i * components + 1],
-        z: components >= 3 ? coords[i * components + 2] : 0,
-      };
-    }
-    await sql`INSERT INTO projection_writeback ${sql(rows, "id", "x", "y", "z")}`;
-    onProgress({ phase: "write-back", done: end, total: n });
-  }
+  onProgress({ phase: "write-back", done: 0, total: n });
   await sql`
     UPDATE items t SET x = w.x, y = w.y, z = w.z
     FROM projection_writeback w WHERE t.id = w.id
   `;
   await sql`TRUNCATE projection_writeback`;
+  await sql`TRUNCATE projection_pca`;
+  onProgress({ phase: "write-back", done: n, total: n });
 
   return { rows: n, dims };
+}
+
+async function writePcaAsCoords(
+  sql: postgres.Sql,
+  components: number,
+  pcaDims: number,
+) {
+  await sql`
+    INSERT INTO projection_writeback (id, x, y, z)
+    SELECT
+      id,
+      COALESCE((comps->>0)::float8, 0),
+      CASE WHEN ${pcaDims} >= 2 THEN COALESCE((comps->>1)::float8, 0) ELSE 0 END,
+      CASE WHEN ${components} >= 3 AND ${pcaDims} >= 3 THEN COALESCE((comps->>2)::float8, 0) ELSE 0 END
+    FROM projection_pca
+  `;
+  await sql`
+    UPDATE items t SET x = w.x, y = w.y, z = w.z
+    FROM projection_writeback w WHERE t.id = w.id
+  `;
+  await sql`TRUNCATE projection_writeback`;
+  await sql`TRUNCATE projection_pca`;
 }

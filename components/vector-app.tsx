@@ -127,8 +127,7 @@ export function VectorApp() {
             <pre className="overflow-x-auto rounded-md bg-black/50 p-3 font-mono text-[11px] text-muted-foreground">
 {`cp .env.example .env   # set DATABASE_URL
 pnpm db:migrate         # apply migrations
-psql "$DATABASE_URL" -f scripts/seed.sql  # demo data
-python scripts/project.py    # compute x/y/z`}
+psql "$DATABASE_URL" -f scripts/seed.sql  # demo data`}
             </pre>
           </div>
         </div>
@@ -138,9 +137,7 @@ python scripts/project.py    # compute x/y/z`}
       {!loading && !error && cloud && cloud.count === 0 && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
           <p className="pointer-events-auto rounded-xl border border-white/10 bg-black/60 px-6 py-4 text-sm text-muted-foreground backdrop-blur-md">
-            No projected points found — run{" "}
-            <code className="font-mono text-sky-300">python scripts/project.py</code>{" "}
-            to compute coordinates.
+            No projected points yet — import a dataset from the toolbar.
           </p>
         </div>
       )}

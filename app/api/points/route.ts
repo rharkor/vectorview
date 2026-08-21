@@ -15,6 +15,7 @@ import { getTableMeta } from "@/lib/schema";
 export const dynamic = "force-dynamic";
 
 const SAMPLE_BUCKETS = 1_000_000;
+const MAX_RENDERED_POINTS = 1_250_000;
 
 async function getTotalCount(sql: ReturnType<typeof getDb>): Promise<number> {
   const cached = getCachedCount();
@@ -52,7 +53,7 @@ export async function GET(request: NextRequest) {
     const { columns } = await getTableMeta(sql);
     if (!columns.has("x") || !columns.has("y")) {
       return Response.json(
-        { error: "Table has no x/y coordinates yet. Run scripts/project.py first." },
+        { error: "Table has no x/y coordinates yet. Import a dataset to project them." },
         { status: 409 },
       );
     }
@@ -60,14 +61,19 @@ export async function GET(request: NextRequest) {
     const hasZ = columns.has("z");
 
     const total = await getTotalCount(sql);
-    const threshold = Math.floor(sample * SAMPLE_BUCKETS);
+    const want = Math.min(
+      MAX_RENDERED_POINTS,
+      Math.max(1, Math.round(sample * Math.max(total, 1))),
+    );
+    const subsample = total > 0 && want < total;
+    const threshold = Math.max(1, Math.round((want / Math.max(total, 1)) * SAMPLE_BUCKETS));
 
     const clusterSelect = hasCluster
       ? sql`${sql(config.clusterColumn)}`
       : sql`-1`;
     const filters = [
       sql`x IS NOT NULL`,
-      ...(sample < 1
+      ...(subsample
         ? [sql`abs(hashtextextended(${sql(config.idColumn)}::text, 42)) % ${SAMPLE_BUCKETS} < ${threshold}`]
         : []),
       ...(hasBbox ? [sql`x BETWEEN ${bbox[0]} AND ${bbox[2]} AND y BETWEEN ${bbox[1]} AND ${bbox[3]}`] : []),

@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     return Response.json({ error: urlError }, { status: 400 });
   }
 
-  const source = connectSourceReadOnly(url);
+  const source = connectSourceReadOnly(url, { connectTimeout: 45 });
   try {
     const pattern = `%${search.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
     const tables = await source<{ schema: string; table: string; est_rows: string }[]>`

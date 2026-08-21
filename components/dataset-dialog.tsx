@@ -708,14 +708,6 @@ export function DatasetDialog() {
 												: `~${selectedTable.estimatedRows.toLocaleString()}`}{" "}
 											rows
 										</Button>
-										{(exactCount ?? selectedTable.estimatedRows) > 250_000 && (
-											<p className="text-xs text-amber-400/90">
-												Large dataset — in-app projection (PCA + UMAP in
-												JavaScript) can take a long time. For millions of rows,
-												prefer the offline pipeline: COPY into items, then run
-												scripts/project.py.
-											</p>
-										)}
 									</>
 								)}
 							</>
