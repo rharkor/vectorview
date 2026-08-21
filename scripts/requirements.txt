@@ -1,0 +1,5 @@
+psycopg[binary]>=3.2
+pgvector>=0.3
+numpy>=2.0
+scikit-learn>=1.5
+umap-learn>=0.5
