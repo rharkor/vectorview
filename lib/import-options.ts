@@ -1,4 +1,4 @@
-const KEY = "vectorview:import-options:v2";
+const KEY = "vectorview:import-options:v3";
 
 export interface ImportOptions {
   pageSize: number;
@@ -12,7 +12,7 @@ export interface ImportOptions {
 export const DEFAULT_IMPORT_OPTIONS: ImportOptions = {
   pageSize: 150,
   connections: 1,
-  includePayload: false,
+  includePayload: true,
   fetchTimeoutSec: 120,
   umapFitMax: 12_000,
   buildHnsw: true,

@@ -792,7 +792,7 @@ export function DatasetDialog() {
 													<div>
 														<p>Copy full row payload</p>
 														<p className="text-xs text-muted-foreground">
-															Off = id / cluster / label only
+															On = change the cluster field after import
 														</p>
 													</div>
 													<Switch
