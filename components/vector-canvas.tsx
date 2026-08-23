@@ -35,6 +35,7 @@ const CANVAS_GL = { antialias: true, alpha: true };
 const NDC = new THREE.Vector3();
 const WORLD = new THREE.Vector3();
 const PROJECTED = new THREE.Vector3();
+const FLY_POS = new THREE.Vector3();
 
 function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
   const out = new Uint8Array(total);
@@ -81,7 +82,7 @@ function CameraRig({
   const flyTarget = useVectorStore((s) => s.flyTarget);
   const set = useThree((s) => s.set);
   const get = useThree((s) => s.get);
-  const fly = useRef<{ target: THREE.Vector3 } | null>(null);
+  const fly = useRef<{ target: THREE.Vector3; extent?: number } | null>(null);
   const cx = center[0];
   const cy = center[1];
   const cz = center[2];
@@ -125,15 +126,39 @@ function CameraRig({
   }, [extent, cx, cy, cz, viewMode, controlsRef, cameraRef, get]);
 
   useEffect(() => {
-    if (flyTarget) fly.current = { target: new THREE.Vector3(flyTarget.x, flyTarget.y, flyTarget.z) };
+    if (flyTarget) {
+      fly.current = {
+        target: new THREE.Vector3(flyTarget.x, flyTarget.y, flyTarget.z),
+        extent: flyTarget.extent,
+      };
+    }
   }, [flyTarget]);
 
   useFrame(() => {
     const controls = controlsRef.current;
-    if (!controls || !fly.current) return;
-    controls.target.lerp(fly.current.target, 0.12);
-    if (controls.target.distanceTo(fly.current.target) < extent * 0.0005) {
-      controls.target.copy(fly.current.target);
+    const cam = cameraRef.current;
+    if (!controls || !cam || !fly.current) return;
+    const dest = fly.current.target;
+    controls.target.lerp(dest, 0.12);
+    if (fly.current.extent && fly.current.extent > 0) {
+      const { width, height } = get().size;
+      const ext = fly.current.extent;
+      if ((cam as THREE.OrthographicCamera).isOrthographicCamera) {
+        const ortho = cam as THREE.OrthographicCamera;
+        const targetZoom = Math.min(width / ext, height / ext) * 0.85;
+        ortho.zoom += (targetZoom - ortho.zoom) * 0.12;
+        ortho.position.set(controls.target.x, controls.target.y, 100);
+        ortho.updateProjectionMatrix();
+      } else {
+        const persp = cam as THREE.PerspectiveCamera;
+        const dist =
+          (ext / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)) * 1.3;
+        FLY_POS.set(dest.x, dest.y - dist * 0.4, dest.z + dist);
+        persp.position.lerp(FLY_POS, 0.12);
+      }
+    }
+    if (controls.target.distanceTo(dest) < Math.max(extent * 0.0005, 1e-5)) {
+      controls.target.copy(dest);
       fly.current = null;
     }
     controls.update();
@@ -373,16 +398,37 @@ export function VectorCanvas() {
 
   useEffect(() => () => geometry?.dispose(), [geometry]);
 
-  const selectedClusters = useVectorStore((s) => s.selectedClusters);
+  const hiddenClusters = useVectorStore((s) => s.hiddenClusters);
+  const focusedCluster = useVectorStore((s) => s.focusedCluster);
+  const highlightedIds = useVectorStore((s) => s.highlightedIds);
   useEffect(() => {
     if (!geometry || !cloud) return;
-    const attr = geometry.getAttribute("aVisible") as THREE.BufferAttribute | undefined;
-    if (!attr) return;
+    const visible = geometry.getAttribute("aVisible") as THREE.BufferAttribute | undefined;
+    if (!visible) return;
     for (let i = 0; i < cloud.count; i++) {
-      attr.setX(i, isClusterVisible(selectedClusters, cloud.clusters[i]) ? 1 : 0);
+      visible.setX(i, isClusterVisible(hiddenClusters, cloud.clusters[i]) ? 1 : 0);
     }
-    attr.needsUpdate = true;
-  }, [geometry, cloud, selectedClusters]);
+    visible.needsUpdate = true;
+  }, [geometry, cloud, hiddenClusters]);
+
+  useEffect(() => {
+    if (!geometry || !cloud) return;
+    const highlight = geometry.getAttribute("aHighlight") as
+      | THREE.BufferAttribute
+      | undefined;
+    if (!highlight) return;
+    const hasSearch = highlightedIds.size > 0;
+    for (let i = 0; i < cloud.count; i++) {
+      let value = 1;
+      if (focusedCluster !== null) {
+        value = cloud.clusters[i] === focusedCluster ? 1 : 0;
+      } else if (hasSearch) {
+        value = highlightedIds.has(cloud.ids[i]) ? 1 : 0;
+      }
+      highlight.setX(i, value);
+    }
+    highlight.needsUpdate = true;
+  }, [geometry, cloud, focusedCluster, highlightedIds]);
 
   const gpuPick = useCallback(
     (state: RootState, cssX: number, cssY: number): number => {
@@ -446,7 +492,7 @@ export function VectorCanvas() {
       }
 
       const visible = (idx: number) =>
-        isClusterVisible(selectedClusters, cloud.clusters[idx]);
+        isClusterVisible(hiddenClusters, cloud.clusters[idx]);
       const nearby = (
         index
           ? queryRadius(index, seedX, seedY, seedZ, radius)
@@ -494,7 +540,7 @@ export function VectorCanvas() {
         .map((h) => h.idx);
       return stacked.length > 0 ? stacked : [primary];
     },
-    [baseSize, cloud, extent, gpuPick, index, selectedClusters],
+    [baseSize, cloud, extent, gpuPick, index, hiddenClusters],
   );
 
   const hideHover = useCallback(() => {

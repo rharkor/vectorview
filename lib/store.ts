@@ -20,6 +20,8 @@ interface FlyTarget {
   y: number;
   z: number;
   nonce: number;
+  /** When set, the camera also zooms to frame this world-space size. */
+  extent?: number;
 }
 
 interface VectorState {
@@ -38,6 +40,7 @@ interface VectorState {
   selectedPos: [number, number, number] | null;
   selectedPoint: PointRow | null;
   neighbors: PointRow[];
+  outsideNeighbors: PointRow[];
   detailsOpen: boolean;
   detailsLoading: boolean;
   hoverIndex: number | null;
@@ -54,8 +57,9 @@ interface VectorState {
 
   datasetDialogOpen: boolean;
   dataVersion: number;
-  /** `null` = every cluster visible; otherwise only these ids are shown. */
-  selectedClusters: Set<number> | null;
+  /** Cluster ids that are hidden on the canvas. */
+  hiddenClusters: Set<number>;
+  focusedCluster: number | null;
   clusterLabels: Record<string, string>;
 
   setCloud: (cloud: PointCloud, total: number, rendered: number) => void;
@@ -67,30 +71,28 @@ interface VectorState {
   selectPoint: (id: string | null, pos?: [number, number, number]) => void;
   setHoverIndex: (index: number | null) => void;
   setSelectedPoint: (point: PointRow | null) => void;
-  setNeighbors: (neighbors: PointRow[]) => void;
+  setNeighbors: (neighbors: PointRow[], outsideNeighbors?: PointRow[]) => void;
   setDetailsOpen: (open: boolean) => void;
   setDetailsLoading: (loading: boolean) => void;
   setSearchResults: (results: SearchResult[], query: string) => void;
   clearSearch: () => void;
-  flyTo: (x: number, y: number, z: number) => void;
+  flyTo: (x: number, y: number, z: number, extent?: number) => void;
   setFps: (fps: number) => void;
   setToken: (token: string | null) => void;
   setTokenDialogOpen: (open: boolean) => void;
   setDatasetDialogOpen: (open: boolean) => void;
   bumpDataVersion: () => void;
-  selectCluster: (id: number) => void;
+  toggleClusterHidden: (id: number) => void;
   showAllClusters: () => void;
+  focusCluster: (id: number) => void;
   setClusterLabels: (labels: Record<string, string>) => void;
 }
 
-export function isClusterVisible(
-  selected: Set<number> | null,
-  id: number,
-): boolean {
-  return selected === null || selected.has(id);
+export function isClusterVisible(hidden: Set<number>, id: number): boolean {
+  return !hidden.has(id);
 }
 
-export const useVectorStore = create<VectorState>((set) => ({
+export const useVectorStore = create<VectorState>((set, get) => ({
   cloud: null,
   totalCount: 0,
   renderedCount: 0,
@@ -106,6 +108,7 @@ export const useVectorStore = create<VectorState>((set) => ({
   selectedPos: null,
   selectedPoint: null,
   neighbors: [],
+  outsideNeighbors: [],
   detailsOpen: false,
   detailsLoading: false,
   hoverIndex: null,
@@ -122,7 +125,8 @@ export const useVectorStore = create<VectorState>((set) => ({
 
   datasetDialogOpen: false,
   dataVersion: 0,
-  selectedClusters: null,
+  hiddenClusters: new Set<number>(),
+  focusedCluster: null,
   clusterLabels: {},
 
   setCloud: (cloud, totalCount, renderedCount) =>
@@ -133,7 +137,8 @@ export const useVectorStore = create<VectorState>((set) => ({
       loading: false,
       loadProgress: null,
       error: null,
-      selectedClusters: null,
+      hiddenClusters: new Set<number>(),
+      focusedCluster: null,
     }),
   setLoading: (loading, progress = null) => set({ loading, loadProgress: progress }),
   setError: (error) => set({ error, loading: false, loadProgress: null }),
@@ -147,42 +152,95 @@ export const useVectorStore = create<VectorState>((set) => ({
       detailsOpen: selectedId !== null,
       selectedPoint: null,
       neighbors: [],
+      outsideNeighbors: [],
       detailsLoading: selectedId !== null,
     }),
   setHoverIndex: (hoverIndex) => set({ hoverIndex }),
   setSelectedPoint: (selectedPoint) => set({ selectedPoint }),
-  setNeighbors: (neighbors) => set({ neighbors, detailsLoading: false }),
+  setNeighbors: (neighbors, outsideNeighbors = []) =>
+    set({ neighbors, outsideNeighbors, detailsLoading: false }),
   setDetailsOpen: (detailsOpen) => set({ detailsOpen }),
   setDetailsLoading: (detailsLoading) => set({ detailsLoading }),
   setSearchResults: (searchResults, searchQuery) =>
     set({
       searchResults,
       searchQuery,
+      focusedCluster: null,
       highlightedIds: new Set(
         searchResults.map((r) => String(r.source_id ?? r.id)),
       ),
     }),
   clearSearch: () =>
     set({ searchResults: [], searchQuery: "", highlightedIds: new Set<string>() }),
-  flyTo: (x, y, z) => set({ flyTarget: { x, y, z, nonce: Date.now() } }),
+  flyTo: (x, y, z, extent) =>
+    set({ flyTarget: { x, y, z, extent, nonce: Date.now() } }),
   setFps: (fps) => set({ fps }),
   setToken: (token) => set({ token }),
   setTokenDialogOpen: (tokenDialogOpen) => set({ tokenDialogOpen }),
   setDatasetDialogOpen: (datasetDialogOpen) => set({ datasetDialogOpen }),
   bumpDataVersion: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),
-  selectCluster: (id) =>
+  toggleClusterHidden: (id) =>
     set((s) => {
-      const current = s.selectedClusters;
-      if (current === null) return { selectedClusters: new Set([id]) };
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-        return { selectedClusters: next.size === 0 ? null : next };
-      }
-      next.add(id);
-      return { selectedClusters: next };
+      const next = new Set(s.hiddenClusters);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      const focusedCluster =
+        next.has(id) && s.focusedCluster === id ? null : s.focusedCluster;
+      return { hiddenClusters: next, focusedCluster };
     }),
-  showAllClusters: () => set({ selectedClusters: null }),
+  showAllClusters: () => set({ hiddenClusters: new Set<number>() }),
+  focusCluster: (id) => {
+    const { cloud, hiddenClusters, focusedCluster } = get();
+    if (!cloud) return;
+    if (focusedCluster === id) {
+      set({ focusedCluster: null, highlightedIds: new Set<string>() });
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    let sx = 0;
+    let sy = 0;
+    let sz = 0;
+    let n = 0;
+    for (let i = 0; i < cloud.count; i++) {
+      if (cloud.clusters[i] !== id) continue;
+      const x = cloud.positions[i * 3];
+      const y = cloud.positions[i * 3 + 1];
+      const z = cloud.positions[i * 3 + 2];
+      sx += x;
+      sy += y;
+      sz += z;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+      n++;
+    }
+    if (n === 0) return;
+    const visible = new Set(hiddenClusters);
+    visible.delete(id);
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1e-6);
+    set({
+      focusedCluster: id,
+      hiddenClusters: visible,
+      searchResults: [],
+      searchQuery: "",
+      highlightedIds: new Set<string>(),
+      flyTarget: {
+        x: sx / n,
+        y: sy / n,
+        z: sz / n,
+        extent: span * 1.25,
+        nonce: Date.now(),
+      },
+    });
+  },
   setClusterLabels: (clusterLabels) => set({ clusterLabels }),
 }));
 

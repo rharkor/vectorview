@@ -13,7 +13,9 @@
     "start": "next start",
     "lint": "eslint",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
-    "db:check": "node --env-file-if-exists=.env scripts/check-migrations.mjs"
+    "db:check": "node --env-file-if-exists=.env scripts/check-migrations.mjs",
+    "db:dump-k8s": "bash scripts/k8s-dump-table.sh",
+    "db:load-dump": "node --env-file-if-exists=.env scripts/load-dump.mjs"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.56",

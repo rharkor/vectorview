@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 
 import { config } from "@/lib/config";
 import { getDb, hasDatabase } from "@/lib/db";
-import { getScalarColumns, toJsonSafe } from "@/lib/schema";
+import { getScalarColumns, getTableMeta, toJsonSafe } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +40,9 @@ export async function GET(
       );
     }
 
+    const { columns } = await getTableMeta(sql);
+    const hasCluster = Boolean(config.clusterColumn) && columns.has(config.clusterColumn);
+
     // Vector passed as a parameter so the HNSW index is used for the kNN scan.
     const neighbors = await sql`
       SELECT ${sql(scalarCols)},
@@ -51,7 +54,32 @@ export async function GET(
       LIMIT ${k}
     `;
 
-    return Response.json({ neighbors: toJsonSafe([...neighbors]) });
+    let outsideNeighbors: typeof neighbors = [];
+    if (hasCluster) {
+      const [self] = await sql<{ cluster: number | null }[]>`
+        SELECT ${sql(config.clusterColumn)} AS cluster
+        FROM ${sql(config.table)}
+        WHERE source_id = ${id}
+        LIMIT 1
+      `;
+      if (self && self.cluster !== null) {
+        outsideNeighbors = await sql`
+          SELECT ${sql(scalarCols)},
+                 (${sql(config.embeddingColumn)} <=> ${ref[0].emb}::vector) AS distance
+          FROM ${sql(config.table)}
+          WHERE source_id IS DISTINCT FROM ${id}
+            AND ${sql(config.embeddingColumn)} IS NOT NULL
+            AND ${sql(config.clusterColumn)} IS DISTINCT FROM ${self.cluster}
+          ORDER BY ${sql(config.embeddingColumn)} <=> ${ref[0].emb}::vector
+          LIMIT ${k}
+        `;
+      }
+    }
+
+    return Response.json({
+      neighbors: toJsonSafe([...neighbors]),
+      outsideNeighbors: toJsonSafe([...outsideNeighbors]),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown database error";
     return Response.json({ error: message }, { status: 500 });

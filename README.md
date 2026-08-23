@@ -56,6 +56,27 @@ Open the **database** icon, paste a source Postgres URL, pick the table with emb
 
 Already have coordinates? Map `x` / `y` / `z` and the projection step is skipped.
 
+### Large table on CloudNativePG
+
+CNPG backups are physical (whole volume) — they cannot dump one table. Run a throwaway pod next to the cluster, `COPY` only the columns you need, then load the gzip locally. That avoids `kubectl relay` for millions of embeddings.
+
+```bash
+scripts/k8s-dump-table.sh \
+  -n database \
+  --service database-cluster-pooler-ro \
+  --secret database-cluster-app \
+  --table public.Creator \
+  --id id \
+  --embedding persona_embedding \
+  --cluster category \
+  --label name \
+  -o dumps/creator.csv.gz
+
+pnpm db:load-dump dumps/creator.csv.gz
+```
+
+The scan stays in-cluster. `kubectl cp` still goes through the API server, but it is **one** compressed file instead of thousands of paged queries. Needs `kubectl`, `psql` on your machine, and the CNPG `*-app` secret (`username` / `password` / `dbname`).
+
 ### Optional: 100k demo cloud
 
 ```bash

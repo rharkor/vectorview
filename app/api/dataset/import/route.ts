@@ -26,10 +26,15 @@ const bodySchema = z.object({
   xColumn: z.string().max(200).nullish(),
   yColumn: z.string().max(200).nullish(),
   zColumn: z.string().max(200).nullish(),
+  pageSize: z.number().int().min(25).max(5_000).optional(),
+  connections: z.number().int().min(1).max(4).optional(),
+  includePayload: z.boolean().optional(),
+  fetchTimeoutSec: z.number().int().min(15).max(600).optional(),
+  umapFitMax: z.number().int().min(500).max(100_000).optional(),
+  buildHnsw: z.boolean().optional(),
 });
 
-const COPY_BATCH = 150;
-const SOURCE_FETCH_MS = 120_000;
+const SKIP_PAYLOAD_UDT = new Set(["bytea"]);
 let importInProgress = false;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -60,6 +65,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid request body." }, { status: 400 });
   }
   const body = parsed.data;
+  const pageSize = body.pageSize ?? 150;
+  const connections = body.connections ?? 1;
+  const includePayload = body.includePayload ?? false;
+  const fetchTimeoutMs = (body.fetchTimeoutSec ?? 120) * 1000;
+  const umapFitMax = body.umapFitMax ?? 12_000;
+  const buildHnsw = body.buildHnsw ?? true;
   const urlError = validatePostgresUrl(body.url);
   if (urlError) {
     return Response.json({ error: urlError }, { status: 400 });
@@ -96,7 +107,12 @@ export async function POST(request: Request) {
     table: `${body.schema}.${body.table}`,
     idColumn: body.idColumn,
     embeddingColumn: body.embeddingColumn,
-    batch: COPY_BATCH,
+    pageSize,
+    connections,
+    includePayload,
+    fetchTimeoutMs,
+    umapFitMax,
+    buildHnsw,
   });
   (async () => {
     const sql = getDb();
@@ -104,7 +120,7 @@ export async function POST(request: Request) {
       statementTimeoutMs: 0,
       idleTimeout: 600,
       connectTimeout: 45,
-      max: 1,
+      max: connections,
     });
     try {
       await send({ phase: "connecting", message: `Connecting to ${redactUrl(body.url)}` });
@@ -123,6 +139,14 @@ export async function POST(request: Request) {
       if (cols.length === 0) {
         throw new Error(`Table ${body.schema}.${body.table} not found on source`);
       }
+      const excluded = new Set(
+        [body.embeddingColumn, body.xColumn, body.yColumn, body.zColumn].filter(Boolean),
+      );
+      const payloadCols = includePayload
+        ? cols
+            .filter((c) => !excluded.has(c.column) && !SKIP_PAYLOAD_UDT.has(c.udt))
+            .map((c) => c.column)
+        : [];
       const embCol = cols.find((c) => c.column === body.embeddingColumn);
       if (!embCol || embCol.udt !== "vector") {
         throw new Error(`Column "${body.embeddingColumn}" is not a pgvector vector column`);
@@ -152,8 +176,8 @@ export async function POST(request: Request) {
       let copied = 0;
       await send({ phase: "copying", done: 0, total: estimatedTotal });
 
-      // Only the mapped viz columns — skip the rest of the row (json, text, …).
       const selectCols = [
+        ...payloadCols.map((c) => source(c)),
         source`${source(body.embeddingColumn)}::text AS __emb`,
         source`${source(body.idColumn)}::text AS __source_id`,
         source`${source(body.idColumn)} AS __cursor_id`,
@@ -187,34 +211,57 @@ export async function POST(request: Request) {
       // close that session after the first chunk — which looked like a hang
       // at 400 rows.
       const fetchPage = async (after: unknown) => {
-        logImport("source-fetch:start", { after: after ?? "(first page)", limit: COPY_BATCH });
-        const started = Date.now();
         const where =
           after === undefined
             ? source`${source(body.embeddingColumn)} IS NOT NULL`
             : source`${source(body.embeddingColumn)} IS NOT NULL AND ${source(body.idColumn)} > ${after}`;
-        const rows = await withTimeout(
-          source<Record<string, unknown>[]>`
-            SELECT ${selectList}
-            FROM ${source(body.schema)}.${source(body.table)}
-            WHERE ${where}
-            ORDER BY ${source(body.idColumn)}
-            LIMIT ${COPY_BATCH}
-          `,
-          SOURCE_FETCH_MS,
-          `source fetch after ${String(after ?? "start")}`,
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          logImport("source-fetch:start", {
+            after: after ?? "(first page)",
+            limit: pageSize,
+            attempt,
+          });
+          const started = Date.now();
+          try {
+            const rows = await withTimeout(
+              source<Record<string, unknown>[]>`
+                SELECT ${selectList}
+                FROM ${source(body.schema)}.${source(body.table)}
+                WHERE ${where}
+                ORDER BY ${source(body.idColumn)}
+                LIMIT ${pageSize}
+              `,
+              fetchTimeoutMs,
+              `source fetch after ${String(after ?? "start")}`,
+            );
+            const embChars = rows.reduce(
+              (sum, row) => sum + (typeof row.__emb === "string" ? row.__emb.length : 0),
+              0,
+            );
+            logImport("source-fetch:done", {
+              rows: rows.length,
+              ms: Date.now() - started,
+              embeddingChars: embChars,
+              lastId: rows.at(-1)?.__cursor_id ?? null,
+            });
+            return rows;
+          } catch (error) {
+            lastError = error;
+            logImport("source-fetch:failed", {
+              attempt,
+              ms: Date.now() - started,
+              error: error instanceof Error ? error.message : error,
+            });
+            if (attempt < 3) {
+              await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+            }
+          }
+        }
+        const detail = lastError instanceof Error ? lastError.message : "unknown error";
+        throw new Error(
+          `Source tunnel dropped while fetching rows (${detail}). Restart kubectl relay/port-forward and import again — already copied rows are only in the local table if this run is retried from scratch.`,
         );
-        const embChars = rows.reduce(
-          (sum, row) => sum + (typeof row.__emb === "string" ? row.__emb.length : 0),
-          0,
-        );
-        logImport("source-fetch:done", {
-          rows: rows.length,
-          ms: Date.now() - started,
-          embeddingChars: embChars,
-          lastId: rows.at(-1)?.__cursor_id ?? null,
-        });
-        return rows;
       };
 
       const writePage = async (rows: Record<string, unknown>[]) => {
@@ -233,13 +280,13 @@ export async function POST(request: Request) {
               cluster = clusterMap.get(key) ?? 0;
             }
           }
-          const payload: Record<string, unknown> = {
-            [body.idColumn]: r.__source_id,
-          };
-          if (body.clusterColumn && r.__cluster !== undefined) {
+          const payload: Record<string, unknown> = includePayload
+            ? Object.fromEntries(payloadCols.map((c) => [c, r[c]]))
+            : { [body.idColumn]: r.__source_id };
+          if (!includePayload && body.clusterColumn && r.__cluster !== undefined) {
             payload[body.clusterColumn] = r.__cluster;
           }
-          if (body.labelColumn && r.__label != null) {
+          if (!includePayload && body.labelColumn && r.__label != null) {
             payload[body.labelColumn] = r.__label;
           }
           return {
@@ -265,13 +312,11 @@ export async function POST(request: Request) {
       };
 
       await send({ phase: "copying", done: 0, total: estimatedTotal, message: "Fetching rows" });
-      let after: unknown;
-      for (;;) {
-        const page = await fetchPage(after);
-        if (page.length === 0) {
-          logImport("copy:no-more-rows", { copied });
-          break;
-        }
+      const prefetch = connections >= 2;
+      let page = await fetchPage(undefined);
+      while (page.length > 0) {
+        const after = page[page.length - 1].__cursor_id;
+        const nextPage = prefetch ? fetchPage(after) : null;
         await send({
           phase: "copying",
           done: copied,
@@ -280,10 +325,11 @@ export async function POST(request: Request) {
         });
         await writePage(page);
         copied += page.length;
-        after = page[page.length - 1].__cursor_id;
-        logImport("copy:progress", { copied, lastId: after });
+        logImport("copy:progress", { copied, lastId: after, prefetch });
         await send({ phase: "copying", done: copied, total: estimatedTotal, message: "Fetching rows" });
+        page = nextPage ? await nextPage : await fetchPage(after);
       }
+      logImport("copy:no-more-rows", { copied });
 
       if (copied === 0) {
         throw new Error(
@@ -312,6 +358,7 @@ export async function POST(request: Request) {
       } else {
         logImport("project:start");
         await projectItems(sql, {
+          umapFitMax,
           onProgress: (p) => {
             logImport(`project:${p.phase}`, { done: p.done, total: p.total });
             void send({ phase: "projecting", step: p.phase, done: p.done, total: p.total });
@@ -324,15 +371,19 @@ export async function POST(request: Request) {
       logImport("index:start");
       await send({ phase: "indexing", message: "Building indexes" });
       await sql`CREATE INDEX IF NOT EXISTS items_xy_idx ON items (x, y)`;
-      try {
-        await sql`
-          CREATE INDEX IF NOT EXISTS items_embedding_hnsw
-          ON items USING hnsw (embedding vector_cosine_ops)
-        `;
-      } catch (error) {
-        logImport("index:hnsw-skipped", {
-          error: error instanceof Error ? error.message : error,
-        });
+      if (buildHnsw) {
+        try {
+          await sql`
+            CREATE INDEX IF NOT EXISTS items_embedding_hnsw
+            ON items USING hnsw (embedding vector_cosine_ops)
+          `;
+        } catch (error) {
+          logImport("index:hnsw-skipped", {
+            error: error instanceof Error ? error.message : error,
+          });
+        }
+      } else {
+        logImport("index:hnsw-skipped", { reason: "disabled in options" });
       }
       await sql`ANALYZE items`.catch((error) => {
         logImport("analyze:failed", { error: error instanceof Error ? error.message : error });

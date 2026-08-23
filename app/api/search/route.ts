@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 const bodySchema = z.object({
   query: z.string().trim().min(1).max(2000),
   k: z.number().int().min(1).max(100).default(20),
+  mode: z.enum(["embedding", "id"]).default("embedding"),
 });
 
 export async function POST(request: Request) {
@@ -19,12 +20,6 @@ export async function POST(request: Request) {
     .get("authorization")
     ?.replace(/^Bearer\s+/i, "")
     .trim();
-  if (!token) {
-    return Response.json(
-      { error: "Missing Vercel AI Gateway token. Add one to enable search." },
-      { status: 401 },
-    );
-  }
   if (!hasDatabase()) {
     return Response.json({ error: "DATABASE_URL is not configured." }, { status: 503 });
   }
@@ -33,7 +28,44 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return Response.json({ error: "Invalid request body." }, { status: 400 });
   }
-  const { query, k } = parsed.data;
+  const { query, k, mode } = parsed.data;
+
+  if (mode === "id") {
+    try {
+      const sql = getDb();
+      const scalarCols = await getScalarColumns(sql);
+      const needle = query;
+      const pattern = `%${needle.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+      const results = await sql`
+        SELECT ${sql(scalarCols)},
+               0::float8 AS distance
+        FROM ${sql(config.table)}
+        WHERE source_id = ${needle}
+           OR source_id ILIKE ${pattern}
+           OR COALESCE(label, '') ILIKE ${pattern}
+           OR ${sql(config.idColumn)}::text = ${needle}
+        ORDER BY
+          CASE
+            WHEN source_id = ${needle} THEN 0
+            WHEN ${sql(config.idColumn)}::text = ${needle} THEN 1
+            WHEN source_id ILIKE ${needle + "%"} THEN 2
+            ELSE 3
+          END
+        LIMIT ${k}
+      `;
+      return Response.json({ query, results: toJsonSafe([...results]), mode: "id" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown database error";
+      return Response.json({ error: message }, { status: 500 });
+    }
+  }
+
+  if (!token) {
+    return Response.json(
+      { error: "Missing Vercel AI Gateway token. Add one to enable search." },
+      { status: 401 },
+    );
+  }
 
   let vectorText: string;
   try {

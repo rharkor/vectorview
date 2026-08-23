@@ -14,6 +14,7 @@ const VERTEX = /* glsl */ `
 attribute float aIndex;
 attribute float aSize;
 attribute float aVisible;
+attribute float aHighlight;
 uniform float uBaseSize;
 uniform float uPerspScale;
 uniform float uOrthoZoom;
@@ -23,10 +24,12 @@ uniform float uPicking;
 varying vec3 vColor;
 varying float vIndex;
 varying float vVisible;
+varying float vHighlight;
 void main() {
   vIndex = aIndex;
   vColor = color;
   vVisible = aVisible;
+  vHighlight = aHighlight;
   if (aVisible < 0.5) {
     gl_PointSize = 0.0;
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -36,7 +39,7 @@ void main() {
   float px = uIsOrtho > 0.5
     ? uBaseSize * uOrthoZoom
     : uBaseSize * uPerspScale / max(0.0001, -mv.z);
-  px *= max(0.45, aSize);
+  px *= max(0.45, aSize) * mix(0.55, 1.2, aHighlight);
   if (uPicking > 0.5) px *= 2.4;
   gl_PointSize = px * uPixelRatio;
   gl_Position = projectionMatrix * mv;
@@ -48,6 +51,7 @@ uniform float uPicking;
 varying vec3 vColor;
 varying float vIndex;
 varying float vVisible;
+varying float vHighlight;
 void main() {
   if (vVisible < 0.5) discard;
   vec2 uv = gl_PointCoord * 2.0 - 1.0;
@@ -65,8 +69,8 @@ void main() {
   float core = exp(-d * d * 22.0);
   float bloom = exp(-d * 7.5) * 0.45;
   float halo = exp(-d * 2.2) * 0.28;
-  float alpha = clamp(core + bloom + halo, 0.0, 1.0);
-  vec3 col = vColor * (0.42 + 2.1 * core + 0.55 * bloom);
+  float alpha = clamp(core + bloom + halo, 0.0, 1.0) * mix(0.22, 1.0, vHighlight);
+  vec3 col = vColor * (0.42 + 2.1 * core + 0.55 * bloom) * mix(0.16, 1.0, vHighlight);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -117,6 +121,10 @@ export function makePointsGeometry(
   );
   geometry.setAttribute(
     "aVisible",
+    new THREE.BufferAttribute(new Float32Array(count).fill(1), 1),
+  );
+  geometry.setAttribute(
+    "aHighlight",
     new THREE.BufferAttribute(new Float32Array(count).fill(1), 1),
   );
   geometry.computeBoundingSphere();
@@ -254,7 +262,7 @@ export function BackgroundWeb({
   extent: number;
 }) {
   const clusters = useVectorStore((s) => s.cloud?.clusters);
-  const selectedClusters = useVectorStore((s) => s.selectedClusters);
+  const hiddenClusters = useVectorStore((s) => s.hiddenClusters);
 
   const built = useMemo(() => {
     if (count < 2 || extent <= 0) return null;
@@ -264,15 +272,15 @@ export function BackgroundWeb({
   const geometry = useMemo(() => {
     if (!built) return null;
     const edges =
-      selectedClusters === null || !clusters
+      hiddenClusters.size === 0 || !clusters
         ? built.edges
         : built.edges.filter(
             (e) =>
-              isClusterVisible(selectedClusters, clusters[e.i]) &&
-              isClusterVisible(selectedClusters, clusters[e.j]),
+              isClusterVisible(hiddenClusters, clusters[e.i]) &&
+              isClusterVisible(hiddenClusters, clusters[e.j]),
           );
     return makeEdgeGeometry(positions, colors, edges, built.maxDist);
-  }, [built, positions, colors, clusters, selectedClusters]);
+  }, [built, positions, colors, clusters, hiddenClusters]);
 
   useEffect(() => () => geometry?.dispose(), [geometry]);
 
@@ -290,20 +298,20 @@ export function HoverWeb({
 }) {
   const hoverIndex = useVectorStore((s) => s.hoverIndex);
   const cloud = useVectorStore((s) => s.cloud);
-  const selectedClusters = useVectorStore((s) => s.selectedClusters);
+  const hiddenClusters = useVectorStore((s) => s.hiddenClusters);
   const material = useMemo(() => makePointsMaterial(), []);
   const pulseRef = useRef<THREE.Mesh>(null);
 
   const local = useMemo(() => {
     if (!index || !cloud || hoverIndex === null) return null;
-    if (!isClusterVisible(selectedClusters, cloud.clusters[hoverIndex])) return null;
+    if (!isClusterVisible(hiddenClusters, cloud.clusters[hoverIndex])) return null;
     const x = cloud.positions[hoverIndex * 3];
     const y = cloud.positions[hoverIndex * 3 + 1];
     const z = cloud.positions[hoverIndex * 3 + 2];
     const nbrs = nearestK(index, x, y, z, 14, extent * 0.12).filter(
       (n) =>
         n.idx !== hoverIndex &&
-        isClusterVisible(selectedClusters, cloud.clusters[n.idx]),
+        isClusterVisible(hiddenClusters, cloud.clusters[n.idx]),
     );
     if (nbrs.length === 0) return { origin: [x, y, z] as [number, number, number], nbrs, arcs: null, nodes: null };
     const arcs = makeArcGeometry(
@@ -319,35 +327,29 @@ export function HoverWeb({
       new THREE.Color(0x7dd3fc),
       new THREE.Color(0xa78bfa),
     );
-    const nodePos = new Float32Array((nbrs.length + 1) * 3);
-    const nodeCol = new Uint8Array((nbrs.length + 1) * 3);
-    nodePos[0] = x;
-    nodePos[1] = y;
-    nodePos[2] = z;
-    nodeCol[0] = 224;
-    nodeCol[1] = 242;
-    nodeCol[2] = 254;
+    const nodePos = new Float32Array(nbrs.length * 3);
+    const nodeCol = new Uint8Array(nbrs.length * 3);
     for (let i = 0; i < nbrs.length; i++) {
-      nodePos[(i + 1) * 3] = cloud.positions[nbrs[i].idx * 3];
-      nodePos[(i + 1) * 3 + 1] = cloud.positions[nbrs[i].idx * 3 + 1];
-      nodePos[(i + 1) * 3 + 2] = cloud.positions[nbrs[i].idx * 3 + 2];
-      nodeCol[(i + 1) * 3] = 167;
-      nodeCol[(i + 1) * 3 + 1] = 139;
-      nodeCol[(i + 1) * 3 + 2] = 250;
+      nodePos[i * 3] = cloud.positions[nbrs[i].idx * 3];
+      nodePos[i * 3 + 1] = cloud.positions[nbrs[i].idx * 3 + 1];
+      nodePos[i * 3 + 2] = cloud.positions[nbrs[i].idx * 3 + 2];
+      nodeCol[i * 3] = 125;
+      nodeCol[i * 3 + 1] = 180;
+      nodeCol[i * 3 + 2] = 220;
     }
     return {
       origin: [x, y, z] as [number, number, number],
       nbrs,
       arcs,
-      nodes: makePointsGeometry(nodePos, nodeCol, nbrs.length + 1),
+      nodes: makePointsGeometry(nodePos, nodeCol, nbrs.length),
     };
-  }, [index, cloud, hoverIndex, extent, selectedClusters]);
+  }, [index, cloud, hoverIndex, extent, hiddenClusters]);
 
   useFrame(({ gl, camera, size, clock }) => {
-    syncPointUniforms(material, gl, camera, size.height, baseSize * 2.1);
+    syncPointUniforms(material, gl, camera, size.height, baseSize * 1.05);
     if (!pulseRef.current) return;
     pulseRef.current.quaternion.copy(camera.quaternion);
-    const s = 1 + 0.16 * Math.sin(clock.elapsedTime * 3.2);
+    const s = 1 + 0.04 * Math.sin(clock.elapsedTime * 2.4);
     pulseRef.current.scale.setScalar(s);
   });
 
@@ -363,20 +365,19 @@ export function HoverWeb({
 
   return (
     <group>
-      <LineWeb geometry={local.arcs} opacity={0.95} />
+      <LineWeb geometry={local.arcs} opacity={0.35} />
       {local.nodes && (
         <points geometry={local.nodes} material={material} frustumCulled={false} />
       )}
       <mesh ref={pulseRef} position={local.origin}>
-        <ringGeometry args={[baseSize * 2.2, baseSize * 2.7, 64]} />
+        <ringGeometry args={[baseSize * 0.42, baseSize * 0.52, 48]} />
         <meshBasicMaterial
           color={0x7dd3fc}
           transparent
-          opacity={0.75}
+          opacity={0.32}
           side={THREE.DoubleSide}
           depthTest={false}
           depthWrite={false}
-          blending={THREE.AdditiveBlending}
         />
       </mesh>
     </group>
@@ -391,6 +392,7 @@ export function SelectionWeb({
   const selectedId = useVectorStore((s) => s.selectedId);
   const selectedPoint = useVectorStore((s) => s.selectedPoint);
   const neighbors = useVectorStore((s) => s.neighbors);
+  const outsideNeighbors = useVectorStore((s) => s.outsideNeighbors);
   const cloud = useVectorStore((s) => s.cloud);
   const storedPos = useVectorStore((s) => s.selectedPos);
 
@@ -410,7 +412,7 @@ export function SelectionWeb({
   useFrame(({ camera, clock }) => {
     if (!ringRef.current) return;
     ringRef.current.quaternion.copy(camera.quaternion);
-    const s = 1 + 0.12 * Math.sin(clock.elapsedTime * 3);
+    const s = 1 + 0.04 * Math.sin(clock.elapsedTime * 2.2);
     ringRef.current.scale.setScalar(s);
   });
 
@@ -429,10 +431,35 @@ export function SelectionWeb({
     [neighbors],
   );
 
+  const outsideNbrs = useMemo(
+    () =>
+      outsideNeighbors
+        .filter((n) => typeof n.x === "number" && typeof n.y === "number")
+        .map((n) => ({
+          position: [n.x as number, n.y as number, (n.z as number) ?? 0] as [
+            number,
+            number,
+            number,
+          ],
+          dist: typeof n.distance === "number" ? n.distance : 1,
+        })),
+    [outsideNeighbors],
+  );
+
   const arcs = useMemo(() => {
     if (!selectedPos || nbrs.length === 0) return null;
     return makeArcGeometry(selectedPos, nbrs, new THREE.Color(0x7dd3fc), new THREE.Color(0xfbbf24));
   }, [selectedPos, nbrs]);
+
+  const outsideArcs = useMemo(() => {
+    if (!selectedPos || outsideNbrs.length === 0) return null;
+    return makeArcGeometry(
+      selectedPos,
+      outsideNbrs,
+      new THREE.Color(0xf472b6),
+      new THREE.Color(0xc084fc),
+    );
+  }, [selectedPos, outsideNbrs]);
 
   const neighborGeometry = useMemo(() => {
     if (nbrs.length === 0) return null;
@@ -462,24 +489,26 @@ export function SelectionWeb({
   const selectedMaterial = useMemo(() => makePointsMaterial(), []);
 
   useFrame(({ gl, camera, size }) => {
-    syncPointUniforms(neighborMaterial, gl, camera, size.height, baseSize * 2.2);
-    syncPointUniforms(selectedMaterial, gl, camera, size.height, baseSize * 2.8);
+    syncPointUniforms(neighborMaterial, gl, camera, size.height, baseSize * 1.15);
+    syncPointUniforms(selectedMaterial, gl, camera, size.height, baseSize * 1.25);
   });
 
   useEffect(
     () => () => {
       arcs?.dispose();
+      outsideArcs?.dispose();
       neighborGeometry?.dispose();
       selectedGeometry?.dispose();
     },
-    [arcs, neighborGeometry, selectedGeometry],
+    [arcs, outsideArcs, neighborGeometry, selectedGeometry],
   );
 
   if (selectedId === null || !selectedPos || !cloud) return null;
 
   return (
     <group>
-      <LineWeb geometry={arcs} opacity={0.9} />
+      <LineWeb geometry={arcs} opacity={0.4} />
+      <LineWeb geometry={outsideArcs} opacity={0.32} />
       {neighborGeometry && (
         <points geometry={neighborGeometry} material={neighborMaterial} frustumCulled={false} />
       )}
@@ -487,15 +516,14 @@ export function SelectionWeb({
         <points geometry={selectedGeometry} material={selectedMaterial} frustumCulled={false} />
       )}
       <mesh ref={ringRef} position={selectedPos}>
-        <ringGeometry args={[baseSize * 3.1, baseSize * 3.6, 64]} />
+        <ringGeometry args={[baseSize * 0.55, baseSize * 0.68, 48]} />
         <meshBasicMaterial
           color={0xfbbf24}
           transparent
-          opacity={0.85}
+          opacity={0.4}
           side={THREE.DoubleSide}
           depthTest={false}
           depthWrite={false}
-          blending={THREE.AdditiveBlending}
         />
       </mesh>
     </group>

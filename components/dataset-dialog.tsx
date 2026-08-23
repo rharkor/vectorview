@@ -7,6 +7,7 @@ import {
 	Database,
 	Loader2,
 	Plug,
+	SlidersHorizontal,
 	Trash2,
 	Upload,
 } from "lucide-react";
@@ -38,6 +39,13 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import {
+	DEFAULT_IMPORT_OPTIONS,
+	getImportOptions,
+	setImportOptions,
+	type ImportOptions,
+} from "@/lib/import-options";
 import { getSourceUrl, setSourceUrl } from "@/lib/source-url";
 import { useVectorStore } from "@/lib/store";
 
@@ -135,6 +143,18 @@ export function DatasetDialog() {
 	const [searchingTables, setSearchingTables] = useState(false);
 	const [totalTables, setTotalTables] = useState<number | null>(null);
 	const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const [showMore, setShowMore] = useState(false);
+	const [importOptions, setOptionsState] = useState<ImportOptions>(
+		DEFAULT_IMPORT_OPTIONS,
+	);
+
+	const updateOptions = (patch: Partial<ImportOptions>) => {
+		setOptionsState((prev) => {
+			const next = { ...prev, ...patch };
+			setImportOptions(next);
+			return next;
+		});
+	};
 
 	// All state updates happen after the fetch settles, never synchronously —
 	// this keeps the effect below free of sync setState.
@@ -192,6 +212,7 @@ export function DatasetDialog() {
 		if (open) {
 			const saved = getSourceUrl();
 			if (saved) setUrl(saved);
+			setOptionsState(getImportOptions());
 		}
 	}
 
@@ -351,6 +372,7 @@ export function DatasetDialog() {
 						xColumn: mapping.xColumn === NONE ? null : mapping.xColumn,
 						yColumn: mapping.yColumn === NONE ? null : mapping.yColumn,
 						zColumn: mapping.zColumn === NONE ? null : mapping.zColumn,
+						...importOptions,
 					}),
 			});
 			if (!res.ok || !res.body) {
@@ -688,26 +710,114 @@ export function DatasetDialog() {
 														: `Only ${embeddingCount.toLocaleString()} of ${exactCount.toLocaleString()} rows have a non-null ${mapping.embeddingColumn} — only those will be imported.`}
 												</p>
 											)}
-										<Button
-											onClick={runImport}
-											disabled={
-												!mapping.idColumn ||
-												!mapping.embeddingColumn ||
-												importing ||
-												embeddingCount === 0
-											}
-										>
-											{counting ? (
-												<Loader2 className="size-4 animate-spin" />
-											) : (
-												<Upload className="size-4" />
-											)}
-											Import{" "}
-											{(embeddingCount ?? exactCount) !== null
-												? (embeddingCount ?? exactCount)!.toLocaleString()
-												: `~${selectedTable.estimatedRows.toLocaleString()}`}{" "}
-											rows
-										</Button>
+										<div className="flex flex-wrap items-center gap-2">
+											<Button
+												onClick={runImport}
+												disabled={
+													!mapping.idColumn ||
+													!mapping.embeddingColumn ||
+													importing ||
+													embeddingCount === 0
+												}
+											>
+												{counting ? (
+													<Loader2 className="size-4 animate-spin" />
+												) : (
+													<Upload className="size-4" />
+												)}
+												Import{" "}
+												{(embeddingCount ?? exactCount) !== null
+													? (embeddingCount ?? exactCount)!.toLocaleString()
+													: `~${selectedTable.estimatedRows.toLocaleString()}`}{" "}
+												rows
+											</Button>
+											<Button
+												type="button"
+												variant="ghost"
+												size="sm"
+												onClick={() => setShowMore((v) => !v)}
+												className="text-muted-foreground"
+											>
+												<SlidersHorizontal className="size-3.5" />
+												{showMore ? "Hide options" : "More options"}
+											</Button>
+										</div>
+										{showMore && (
+											<div className="grid gap-3 rounded-lg border border-border p-3">
+												<p className="text-xs text-muted-foreground">
+													kubectl relay is still one tunnel. Keep a single
+													connection and moderate page size or the heartbeat
+													dies mid-copy.
+												</p>
+												<div className="grid grid-cols-2 gap-3">
+													<NumberField
+														label="Rows per page"
+														hint="Bigger is faster on a good link"
+														value={importOptions.pageSize}
+														min={25}
+														max={5000}
+														onChange={(pageSize) => updateOptions({ pageSize })}
+													/>
+													<NumberField
+														label="Source connections"
+														hint="Keep 1 for kubectl relay"
+														value={importOptions.connections}
+														min={1}
+														max={4}
+														onChange={(connections) =>
+															updateOptions({ connections })
+														}
+													/>
+													<NumberField
+														label="Fetch timeout (sec)"
+														value={importOptions.fetchTimeoutSec}
+														min={15}
+														max={600}
+														onChange={(fetchTimeoutSec) =>
+															updateOptions({ fetchTimeoutSec })
+														}
+													/>
+													<NumberField
+														label="UMAP fit rows"
+														hint="Lower is faster to project"
+														value={importOptions.umapFitMax}
+														min={500}
+														max={100000}
+														onChange={(umapFitMax) =>
+															updateOptions({ umapFitMax })
+														}
+													/>
+												</div>
+												<div className="flex items-center justify-between gap-3 text-sm">
+													<div>
+														<p>Copy full row payload</p>
+														<p className="text-xs text-muted-foreground">
+															Off = id / cluster / label only
+														</p>
+													</div>
+													<Switch
+														checked={importOptions.includePayload}
+														onCheckedChange={(includePayload) =>
+															updateOptions({ includePayload })
+														}
+													/>
+												</div>
+												<div className="flex items-center justify-between gap-3 text-sm">
+													<div>
+														<p>Build HNSW index</p>
+														<p className="text-xs text-muted-foreground">
+															Skip to finish sooner; neighbors get slower
+														</p>
+													</div>
+													<Switch
+														checked={importOptions.buildHnsw}
+														onCheckedChange={(buildHnsw) =>
+															updateOptions({ buildHnsw })
+														}
+													/>
+												</div>
+											</div>
+										)}
 									</>
 								)}
 							</>
@@ -747,6 +857,40 @@ export function DatasetDialog() {
 				)}
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function NumberField({
+	label,
+	hint,
+	value,
+	min,
+	max,
+	onChange,
+}: {
+	label: string;
+	hint?: string;
+	value: number;
+	min: number;
+	max: number;
+	onChange: (n: number) => void;
+}) {
+	return (
+		<div className="grid gap-1.5">
+			<Label className="text-xs">{label}</Label>
+			<Input
+				type="number"
+				min={min}
+				max={max}
+				value={value}
+				onChange={(e) => {
+					const n = Number(e.target.value);
+					if (!Number.isFinite(n)) return;
+					onChange(Math.min(max, Math.max(min, Math.round(n))));
+				}}
+			/>
+			{hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+		</div>
 	);
 }
 

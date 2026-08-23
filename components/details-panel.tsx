@@ -42,12 +42,62 @@ function previewLabel(row: PointRow): string {
 /** Fields rendered as key/value rows; payload gets the Shiki block instead. */
 const HIDDEN_KEYS = new Set(["x", "y", "z", "payload", "source_id", "label"]);
 
+function NeighborSlot({
+  title,
+  neighbors,
+  loading,
+  empty,
+  onPick,
+}: {
+  title: string;
+  neighbors: PointRow[];
+  loading: boolean;
+  empty: string;
+  onPick: (n: PointRow) => void;
+}) {
+  return (
+    <>
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        {title}
+        {loading && <Loader2 className="size-3 animate-spin" />}
+      </div>
+      <div className="flex flex-col gap-1">
+        {neighbors.map((n) => (
+          <button
+            key={rowId(n)}
+            type="button"
+            onClick={() => onPick(n)}
+            className="group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-sm transition-colors hover:border-border hover:bg-accent"
+          >
+            <span className="min-w-0 flex-1 truncate">{previewLabel(n)}</span>
+            {typeof n.cluster === "number" && n.cluster >= 0 && (
+              <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                {n.cluster}
+              </Badge>
+            )}
+            {typeof n.distance === "number" && (
+              <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
+                {n.distance.toFixed(4)}
+              </Badge>
+            )}
+            <ArrowRight className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
+          </button>
+        ))}
+        {neighbors.length === 0 && !loading && (
+          <p className="px-2 py-1 text-sm text-muted-foreground">{empty}</p>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function DetailsPanel() {
   const open = useVectorStore((s) => s.detailsOpen);
   const setOpen = useVectorStore((s) => s.setDetailsOpen);
   const selectedId = useVectorStore((s) => s.selectedId);
   const point = useVectorStore((s) => s.selectedPoint);
   const neighbors = useVectorStore((s) => s.neighbors);
+  const outsideNeighbors = useVectorStore((s) => s.outsideNeighbors);
   const loading = useVectorStore((s) => s.detailsLoading);
   const setSelectedPoint = useVectorStore((s) => s.setSelectedPoint);
   const setNeighbors = useVectorStore((s) => s.setNeighbors);
@@ -71,6 +121,7 @@ export function DetailsPanel() {
         };
         const neighborsBody = (await neighborsRes.json()) as {
           neighbors?: PointRow[];
+          outsideNeighbors?: PointRow[];
           error?: string;
         };
         if (cancelled) return;
@@ -80,7 +131,10 @@ export function DetailsPanel() {
         }
         setSelectedPoint(pointBody.point ?? null);
         if (neighborsRes.ok) {
-          setNeighbors(neighborsBody.neighbors ?? []);
+          setNeighbors(
+            neighborsBody.neighbors ?? [],
+            neighborsBody.outsideNeighbors ?? [],
+          );
         } else {
           setNeighbors([]);
           toast.error(neighborsBody.error ?? "Failed to load neighbors");
@@ -170,44 +224,47 @@ export function DetailsPanel() {
 
               <Separator className="my-4" />
 
-              <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-                Nearest neighbors
-                {loading && <Loader2 className="size-3 animate-spin" />}
-              </div>
-              <div className="flex flex-col gap-1">
-                {neighbors.map((n) => (
-                  <button
-                    key={rowId(n)}
-                    onClick={() => {
-                      if (typeof n.x === "number" && typeof n.y === "number") {
-                        const pos: [number, number, number] = [
-                          n.x,
-                          n.y,
-                          (n.z as number) ?? 0,
-                        ];
-                        flyTo(...pos);
-                        selectPoint(rowId(n), pos);
-                      } else {
-                        selectPoint(rowId(n));
-                      }
-                    }}
-                    className="group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-sm transition-colors hover:border-border hover:bg-accent"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{previewLabel(n)}</span>
-                    {typeof n.distance === "number" && (
-                      <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
-                        {n.distance.toFixed(4)}
-                      </Badge>
-                    )}
-                    <ArrowRight className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
-                  </button>
-                ))}
-                {neighbors.length === 0 && !loading && (
-                  <p className="px-2 py-1 text-sm text-muted-foreground">
-                    No neighbors found.
-                  </p>
-                )}
-              </div>
+              <NeighborSlot
+                title="Nearest neighbors"
+                neighbors={neighbors}
+                loading={loading}
+                empty="No neighbors found."
+                onPick={(n) => {
+                  if (typeof n.x === "number" && typeof n.y === "number") {
+                    const pos: [number, number, number] = [
+                      n.x,
+                      n.y,
+                      (n.z as number) ?? 0,
+                    ];
+                    flyTo(...pos);
+                    selectPoint(rowId(n), pos);
+                  } else {
+                    selectPoint(rowId(n));
+                  }
+                }}
+              />
+
+              <Separator className="my-4" />
+
+              <NeighborSlot
+                title="Outside this cluster"
+                neighbors={outsideNeighbors}
+                loading={loading}
+                empty="No neighbors outside this cluster."
+                onPick={(n) => {
+                  if (typeof n.x === "number" && typeof n.y === "number") {
+                    const pos: [number, number, number] = [
+                      n.x,
+                      n.y,
+                      (n.z as number) ?? 0,
+                    ];
+                    flyTo(...pos);
+                    selectPoint(rowId(n), pos);
+                  } else {
+                    selectPoint(rowId(n));
+                  }
+                }}
+              />
             </>
           )}
         </ScrollArea>
