@@ -126,22 +126,39 @@ export async function listPayloadFields(sql: postgres.Sql): Promise<string[]> {
   return [...keys].sort((a, b) => a.localeCompare(b));
 }
 
+export type ClusterProgress = {
+  phase: "counting" | "updating" | "saving" | "done";
+  done?: number;
+  total?: number;
+  message?: string;
+};
+
+const REMAP_BATCH = 4_000;
+
 export async function applyClusterColumn(
   sql: postgres.Sql,
   column: string,
+  onProgress?: (progress: ClusterProgress) => void | Promise<void>,
 ): Promise<{ column: string; labels: ClusterLabelMap; count: number }> {
   const key = column.trim();
   if (!key) throw new Error("Choose a payload field to color by.");
 
-  const [{ n }] = await sql<{ n: string }[]>`
-    SELECT count(DISTINCT payload->>${key})::text AS n
+  const report = async (progress: ClusterProgress) => {
+    await onProgress?.(progress);
+  };
+
+  await report({ phase: "counting", done: 0, total: 1, message: "Counting values…" });
+
+  const distinctRows = await sql<{ value: string }[]>`
+    SELECT DISTINCT payload->>${key} AS value
     FROM items
     WHERE payload ? ${key}
       AND payload->>${key} IS NOT NULL
       AND payload->>${key} <> ''
+    ORDER BY 1
   `;
-  const distinct = Number(n);
-  if (!Number.isFinite(distinct) || distinct === 0) {
+  const distinct = distinctRows.length;
+  if (distinct === 0) {
     throw new Error(`No values found in payload field "${key}".`);
   }
   if (distinct > MAX_CLUSTER_VALUES) {
@@ -150,29 +167,64 @@ export async function applyClusterColumn(
     );
   }
 
+  const labels: ClusterLabelMap = {};
+  const mapRows = distinctRows.map((row, cid) => {
+    labels[String(cid)] = row.value;
+    return { value: row.value, cid };
+  });
+
   await sql.begin(async (tx) => {
-    await tx`UPDATE items SET cluster = NULL`;
-    await tx`
-      UPDATE items AS t
-      SET cluster = m.cid
-      FROM (
-        SELECT
-          id,
-          (dense_rank() OVER (ORDER BY payload->>${key})) - 1 AS cid
-        FROM items
-        WHERE payload ? ${key}
-          AND payload->>${key} IS NOT NULL
-          AND payload->>${key} <> ''
-      ) m
-      WHERE t.id = m.id
-    `;
-    const labeled = await tx<{ cluster: number; label: string }[]>`
-      SELECT DISTINCT cluster, payload->>${key} AS label
-      FROM items
-      WHERE cluster IS NOT NULL
-    `;
-    const labels: ClusterLabelMap = {};
-    for (const row of labeled) labels[String(row.cluster)] = row.label;
+    await tx`CREATE TEMP TABLE cluster_map (
+      value text PRIMARY KEY,
+      cid integer NOT NULL
+    ) ON COMMIT DROP`;
+    await tx`INSERT INTO cluster_map ${tx(mapRows)}`;
+
+    const [{ n }] = await tx<{ n: string }[]>`SELECT count(*)::text AS n FROM items`;
+    const total = Number(n);
+    await report({
+      phase: "updating",
+      done: 0,
+      total,
+      message: "Recoloring points…",
+    });
+
+    let lastId = 0;
+    let done = 0;
+    while (done < total) {
+      const batch = await tx<{ id: string }[]>`
+        WITH batch AS (
+          SELECT id FROM items
+          WHERE id > ${lastId}
+          ORDER BY id
+          LIMIT ${REMAP_BATCH}
+        )
+        UPDATE items AS t
+        SET cluster = mapped.cid
+        FROM (
+          SELECT b.id, m.cid
+          FROM batch b
+          JOIN items i ON i.id = b.id
+          LEFT JOIN cluster_map m ON m.value = i.payload->>${key}
+        ) mapped
+        WHERE t.id = mapped.id
+        RETURNING t.id
+      `;
+      if (batch.length === 0) break;
+      lastId = batch.reduce((max, row) => {
+        const id = Number(row.id);
+        return id > max ? id : max;
+      }, lastId);
+      done += batch.length;
+      await report({
+        phase: "updating",
+        done,
+        total,
+        message: "Recoloring points…",
+      });
+    }
+
+    await report({ phase: "saving", done: total, total, message: "Saving labels…" });
     await tx`
       UPDATE dataset_meta
       SET cluster_column = ${key}, cluster_labels = ${tx.json(labels)}
@@ -180,7 +232,6 @@ export async function applyClusterColumn(
     `;
   });
 
-  const labels = await loadClusterLabels(sql);
   return { column: key, labels, count: distinct };
 }
 

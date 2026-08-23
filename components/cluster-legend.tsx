@@ -2,10 +2,11 @@
 
 import { Command } from "cmdk";
 import { Check, ChevronsUpDown, Crosshair, Eye, EyeOff, Loader2, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
 	Popover,
 	PopoverContent,
@@ -13,6 +14,48 @@ import {
 } from "@/components/ui/popover";
 import { clusterLabel, clusterRgbCss } from "@/lib/colors";
 import { isClusterVisible, useVectorStore } from "@/lib/store";
+
+interface RemapProgress {
+	phase: string;
+	done?: number;
+	total?: number;
+	message?: string;
+	labels?: Record<string, string>;
+	column?: string;
+	error?: string;
+}
+
+function remapLabel(
+	progress: RemapProgress | null,
+	awaitingReload: boolean,
+	loadProgress: number | null,
+): string {
+	if (awaitingReload || progress?.phase === "reloading") {
+		if (loadProgress != null) return `Reloading map… ${Math.round(loadProgress * 100)}%`;
+		return "Reloading map…";
+	}
+	if (progress?.message) return progress.message;
+	if (progress?.phase === "counting") return "Counting values…";
+	if (progress?.phase === "updating") return "Recoloring points…";
+	if (progress?.phase === "saving") return "Saving labels…";
+	return "Updating clusters…";
+}
+
+function remapPercent(
+	progress: RemapProgress | null,
+	awaitingReload: boolean,
+	loadProgress: number | null,
+): number {
+	if (awaitingReload || progress?.phase === "reloading") {
+		return 88 + 12 * (loadProgress ?? 0);
+	}
+	if (progress?.phase === "counting") return 4;
+	if (progress?.phase === "saving") return 86;
+	if (progress?.done !== undefined && progress.total && progress.total > 0) {
+		return 6 + (progress.done / progress.total) * 80;
+	}
+	return 0;
+}
 
 export function ClusterLegend() {
 	const cloud = useVectorStore((s) => s.cloud);
@@ -24,12 +67,17 @@ export function ClusterLegend() {
 	const focusCluster = useVectorStore((s) => s.focusCluster);
 	const setClusterLabels = useVectorStore((s) => s.setClusterLabels);
 	const bumpDataVersion = useVectorStore((s) => s.bumpDataVersion);
+	const loading = useVectorStore((s) => s.loading);
+	const loadProgress = useVectorStore((s) => s.loadProgress);
 	const [filter, setFilter] = useState("");
 	const [clusterColumn, setClusterColumn] = useState<string | null>(null);
 	const [clusterFields, setClusterFields] = useState<string[]>([]);
 	const [recoloring, setRecoloring] = useState(false);
+	const [progress, setProgress] = useState<RemapProgress | null>(null);
+	const [awaitingReload, setAwaitingReload] = useState(false);
 	const [fieldOpen, setFieldOpen] = useState(false);
 	const [fieldSearch, setFieldSearch] = useState("");
+	const sawReload = useRef(false);
 
 	useEffect(() => {
 		if (!cloud) return;
@@ -52,31 +100,87 @@ export function ClusterLegend() {
 		};
 	}, [cloud, setClusterLabels]);
 
+	useEffect(() => {
+		if (!awaitingReload) return;
+		if (loading) sawReload.current = true;
+		if (sawReload.current && !loading) {
+			sawReload.current = false;
+			setAwaitingReload(false);
+			setRecoloring(false);
+			setProgress(null);
+		}
+	}, [awaitingReload, loading]);
+
+	useEffect(() => {
+		if (!awaitingReload) return;
+		const timeout = window.setTimeout(() => {
+			sawReload.current = false;
+			setAwaitingReload(false);
+			setRecoloring(false);
+			setProgress(null);
+		}, 60_000);
+		return () => window.clearTimeout(timeout);
+	}, [awaitingReload]);
+
 	const changeClusterField = async (column: string) => {
 		if (!column || column === clusterColumn || recoloring) return;
 		setRecoloring(true);
+		setProgress({ phase: "counting", message: "Counting values…" });
 		try {
 			const res = await fetch("/api/clusters", {
 				method: "PATCH",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ column }),
 			});
-			const body = (await res.json().catch(() => null)) as {
-				labels?: Record<string, string>;
-				column?: string;
-				error?: string;
-			} | null;
-			if (!res.ok) {
+			const contentType = res.headers.get("content-type") ?? "";
+			if (!res.ok || !res.body || !contentType.includes("text/event-stream")) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
 				toast.error(body?.error ?? "Could not change cluster field");
+				setRecoloring(false);
+				setProgress(null);
 				return;
 			}
-			if (body?.labels) setClusterLabels(body.labels);
-			setClusterColumn(body?.column ?? column);
-			bumpDataVersion();
+
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			let handedOff = false;
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const events = buffer.split("\n\n");
+				buffer = events.pop() ?? "";
+				for (const chunk of events) {
+					const line = chunk.trim();
+					if (!line.startsWith("data:")) continue;
+					const event = JSON.parse(line.slice(5)) as RemapProgress;
+					if (event.phase === "error") {
+						toast.error(event.error ?? "Could not change cluster field");
+						setRecoloring(false);
+						setProgress(null);
+						return;
+					}
+					setProgress(event);
+					if (event.phase === "done") {
+						if (event.labels) setClusterLabels(event.labels);
+						setClusterColumn(event.column ?? column);
+						sawReload.current = false;
+						setProgress({ phase: "reloading", message: "Reloading map…" });
+						setAwaitingReload(true);
+						bumpDataVersion();
+						handedOff = true;
+					}
+				}
+			}
+			if (!handedOff) {
+				setRecoloring(false);
+				setProgress(null);
+			}
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : "Could not change cluster field");
-		} finally {
 			setRecoloring(false);
+			setProgress(null);
 		}
 	};
 
@@ -111,6 +215,8 @@ export function ClusterLegend() {
 
 	const hasClusters = rows.some((r) => r.id >= 0);
 	const someHidden = hiddenClusters.size > 0;
+	const progressLabel = remapLabel(progress, awaitingReload, loadProgress);
+	const progressPercent = remapPercent(progress, awaitingReload, loadProgress);
 
 	return (
 		<div className="pointer-events-auto flex w-80 flex-col gap-2 rounded-xl border border-white/10 bg-black/40 pt-2 backdrop-blur-md">
@@ -147,7 +253,7 @@ export function ClusterLegend() {
 							>
 								<span className="min-w-0 truncate">
 									{recoloring
-										? "Updating…"
+										? progressLabel
 										: clusterColumn ??
 											(clusterFields.length === 0
 												? "No payload fields"
@@ -200,6 +306,25 @@ export function ClusterLegend() {
 					</PopoverContent>
 				</Popover>
 			</div>
+			{recoloring && (
+				<div className="shrink-0 px-2">
+					<div className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5">
+						<div className="mb-1 flex items-center justify-between gap-2">
+							<p className="min-w-0 truncate text-[11px] text-muted-foreground">
+								{progressLabel}
+							</p>
+							{progress?.phase === "updating" &&
+								progress.done !== undefined &&
+								progress.total !== undefined && (
+									<p className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+										{progress.done.toLocaleString()} / {progress.total.toLocaleString()}
+									</p>
+								)}
+						</div>
+						<Progress value={progressPercent} className="gap-0" />
+					</div>
+				</div>
+			)}
 			{hasClusters && (
 				<div className="shrink-0 px-2 pb-1.5">
 					<label className="flex items-center gap-1.5 rounded-md border border-white/10 bg-black/30 px-2 py-1">
