@@ -1,4 +1,4 @@
-import { PCA } from "ml-pca";
+import { NipalsPca } from "@/lib/pca";
 import { UMAP } from "umap-js";
 import type postgres from "postgres";
 
@@ -58,7 +58,7 @@ export async function projectItems(
   options: ProjectOptions = {},
 ): Promise<{ rows: number; dims: number }> {
   const components = options.components ?? 3;
-  const pcaSampleSize = options.pcaSampleSize ?? 8_000;
+  const pcaSampleSize = options.pcaSampleSize ?? 3_000;
   const umapFitMax = options.umapFitMax ?? 12_000;
   const batchSize = options.batchSize ?? 1_500;
   const onProgress = options.onProgress ?? (() => {});
@@ -78,8 +78,9 @@ export async function projectItems(
   await sql`TRUNCATE projection_pca`;
   await sql`TRUNCATE projection_writeback`;
 
-  onProgress({ phase: "pca-fit", done: 0, total: 1 });
   const sampleLimit = Math.min(pcaSampleSize, n);
+  const pcaDimsHint = options.pcaDims ?? 40;
+  onProgress({ phase: "pca-fit", done: 0, total: pcaDimsHint + 1 });
   const sampleRows = await sql<{ emb: string }[]>`
     SELECT embedding::text AS emb FROM items
     WHERE embedding IS NOT NULL AND id % ${strideFor(n, sampleLimit)} = 0
@@ -102,9 +103,15 @@ export async function projectItems(
   }
   const dims = sample[0]?.length ?? 0;
   if (dims === 0 || sample.length < 2) throw new Error("Could not read embeddings");
-  const pcaDims = Math.min(options.pcaDims ?? 40, dims, sample.length);
-  const pca = new PCA(sample, { center: true, scale: false });
-  onProgress({ phase: "pca-fit", done: 1, total: 1 });
+  const pcaDims = Math.min(pcaDimsHint, dims, sample.length - 1);
+  onProgress({ phase: "pca-fit", done: 1, total: pcaDims + 1 });
+  await yieldToEventLoop();
+  const pca = new NipalsPca();
+  await pca.fit(sample, pcaDims, {
+    onComponent: (done, total) => {
+      onProgress({ phase: "pca-fit", done: 1 + done, total: 1 + total });
+    },
+  });
 
   let transformed = 0;
   const pcaCursor = sql<{ id: string; emb: string }[]>`
@@ -114,7 +121,7 @@ export async function projectItems(
   `.cursor(batchSize);
   for await (const rows of pcaCursor) {
     const batch = rows.map((r) => parseVector(r.emb));
-    const out = pca.predict(batch, { nComponents: pcaDims }).to2DArray();
+    const out = pca.predict(batch, pcaDims);
     const staged = rows.map((r, i) => ({
       id: Number(r.id),
       comps: sql.json(out[i].slice(0, pcaDims)),
