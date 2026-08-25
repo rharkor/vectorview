@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import { buildConstellation, type WebEdge } from "@/lib/constellation";
-import { nearestK, type GridIndex } from "@/lib/spatial";
+import { type GridIndex, nearestK } from "@/lib/spatial";
 import { isClusterVisible, useVectorStore } from "@/lib/store";
 
 const VERTEX = /* glsl */ `
@@ -119,10 +119,7 @@ export function makePointsGeometry(
     "aSize",
     new THREE.BufferAttribute(sizes ?? new Float32Array(count).fill(1), 1),
   );
-  geometry.setAttribute(
-    "aVisible",
-    new THREE.BufferAttribute(new Float32Array(count).fill(1), 1),
-  );
+  geometry.setAttribute("aVisible", new THREE.BufferAttribute(new Float32Array(count).fill(1), 1));
   geometry.setAttribute(
     "aHighlight",
     new THREE.BufferAttribute(new Float32Array(count).fill(1), 1),
@@ -147,8 +144,7 @@ export function syncPointUniforms(
     u.uOrthoZoom.value = (camera as THREE.OrthographicCamera).zoom;
   } else {
     const persp = camera as THREE.PerspectiveCamera;
-    u.uPerspScale.value =
-      sizeHeight / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2));
+    u.uPerspScale.value = sizeHeight / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2));
   }
 }
 
@@ -309,11 +305,10 @@ export function HoverWeb({
     const y = cloud.positions[hoverIndex * 3 + 1];
     const z = cloud.positions[hoverIndex * 3 + 2];
     const nbrs = nearestK(index, x, y, z, 14, extent * 0.12).filter(
-      (n) =>
-        n.idx !== hoverIndex &&
-        isClusterVisible(hiddenClusters, cloud.clusters[n.idx]),
+      (n) => n.idx !== hoverIndex && isClusterVisible(hiddenClusters, cloud.clusters[n.idx]),
     );
-    if (nbrs.length === 0) return { origin: [x, y, z] as [number, number, number], nbrs, arcs: null, nodes: null };
+    if (nbrs.length === 0)
+      return { origin: [x, y, z] as [number, number, number], nbrs, arcs: null, nodes: null };
     const arcs = makeArcGeometry(
       [x, y, z],
       nbrs.map((n) => ({
@@ -366,9 +361,7 @@ export function HoverWeb({
   return (
     <group>
       <LineWeb geometry={local.arcs} opacity={0.35} />
-      {local.nodes && (
-        <points geometry={local.nodes} material={material} frustumCulled={false} />
-      )}
+      {local.nodes && <points geometry={local.nodes} material={material} frustumCulled={false} />}
       <mesh ref={pulseRef} position={local.origin}>
         <ringGeometry args={[baseSize * 0.42, baseSize * 0.52, 48]} />
         <meshBasicMaterial
@@ -384,11 +377,7 @@ export function HoverWeb({
   );
 }
 
-export function SelectionWeb({
-  baseSize,
-}: {
-  baseSize: number;
-}) {
+export function SelectionWeb({ baseSize }: { baseSize: number }) {
   const selectedId = useVectorStore((s) => s.selectedId);
   const selectedPoint = useVectorStore((s) => s.selectedPoint);
   const neighbors = useVectorStore((s) => s.neighbors);
@@ -478,11 +467,7 @@ export function SelectionWeb({
 
   const selectedGeometry = useMemo(() => {
     if (!selectedPos) return null;
-    return makePointsGeometry(
-      new Float32Array(selectedPos),
-      new Uint8Array([255, 255, 255]),
-      1,
-    );
+    return makePointsGeometry(new Float32Array(selectedPos), new Uint8Array([255, 255, 255]), 1);
   }, [selectedPos]);
 
   const neighborMaterial = useMemo(() => makePointsMaterial(), []);

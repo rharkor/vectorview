@@ -4,11 +4,7 @@ import { Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { useVectorStore } from "@/lib/store";
 
@@ -54,8 +50,7 @@ export function SettingsPopover() {
               <Label>Sample rate</Label>
               <span className="font-mono text-xs text-muted-foreground">
                 {(sample * 100).toFixed(0)}%
-                {totalCount > 0 &&
-                  ` · ~${Math.round(totalCount * sample).toLocaleString()} pts`}
+                {totalCount > 0 && ` · ~${Math.round(totalCount * sample).toLocaleString()} pts`}
               </span>
             </div>
             <Slider
@@ -66,9 +61,8 @@ export function SettingsPopover() {
               step={0.01}
             />
             <p className="text-xs text-muted-foreground">
-              Lower sampling keeps interaction smooth on very large tables. The
-              subset is stable (hash-based), so points don&apos;t flicker between
-              reloads.
+              Lower sampling keeps interaction smooth on very large tables. The subset is stable
+              (hash-based), so points don&apos;t flicker between reloads.
             </p>
           </div>
         </div>

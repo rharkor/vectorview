@@ -1,12 +1,7 @@
 import type postgres from "postgres";
 
 const MAX_CLUSTER_VALUES = 2_500;
-const SKIP_FIELD_HINTS = new Set([
-  "embedding",
-  "emb",
-  "vector",
-  "embedding_vector",
-]);
+const SKIP_FIELD_HINTS = new Set(["embedding", "emb", "vector", "embedding_vector"]);
 
 const NAME_HINTS = new Set([
   "cluster",
@@ -98,9 +93,7 @@ export interface ClusterField {
   key: string;
 }
 
-export async function loadClusterColumn(
-  sql: postgres.Sql,
-): Promise<string | null> {
+export async function loadClusterColumn(sql: postgres.Sql): Promise<string | null> {
   const rows = await sql<{ cluster_column: string | null }[]>`
     SELECT cluster_column FROM dataset_meta WHERE id = 1
   `.catch(() => [] as { cluster_column: string | null }[]);
@@ -234,4 +227,3 @@ export async function applyClusterColumn(
 
   return { column: key, labels, count: distinct };
 }
-

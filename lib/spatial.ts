@@ -7,11 +7,7 @@ export type GridIndex = {
   count: number;
 };
 
-export function buildGrid(
-  positions: Float32Array,
-  count: number,
-  cell: number,
-): GridIndex {
+export function buildGrid(positions: Float32Array, count: number, cell: number): GridIndex {
   const bins = new Map<string, number[]>();
   const size = Math.max(cell, 1e-9);
   for (let i = 0; i < count; i++) {

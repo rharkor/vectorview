@@ -1,6 +1,6 @@
-import { NipalsPca } from "@/lib/pca";
-import { UMAP } from "umap-js";
 import type postgres from "postgres";
+import { UMAP } from "umap-js";
+import { NipalsPca } from "@/lib/pca";
 
 export type ProjectionPhase =
   | "pca-fit"
@@ -220,11 +220,7 @@ export async function projectItems(
   return { rows: n, dims };
 }
 
-async function writePcaAsCoords(
-  sql: postgres.Sql,
-  components: number,
-  pcaDims: number,
-) {
+async function writePcaAsCoords(sql: postgres.Sql, components: number, pcaDims: number) {
   await sql`
     INSERT INTO projection_writeback (id, x, y, z)
     SELECT

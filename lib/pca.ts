@@ -90,10 +90,7 @@ export class NipalsPca {
     if (!this.mean || this.components.length === 0) {
       throw new Error("PCA has not been fit");
     }
-    const k = Math.min(
-      nComponents ?? this.components.length,
-      this.components.length,
-    );
+    const k = Math.min(nComponents ?? this.components.length, this.components.length);
     const mean = this.mean;
     const axes = this.components;
     return batch.map((row) => {

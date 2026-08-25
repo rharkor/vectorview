@@ -1,5 +1,5 @@
-import { createGateway, GatewayAuthenticationError } from "@ai-sdk/gateway";
 import type { GatewayEmbeddingModelId } from "@ai-sdk/gateway";
+import { createGateway, GatewayAuthenticationError } from "@ai-sdk/gateway";
 import { embed } from "ai";
 import { z } from "zod";
 

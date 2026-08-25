@@ -79,8 +79,7 @@ export async function PATCH(request: Request) {
         count: result.count,
       });
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to change cluster field";
+      const message = error instanceof Error ? error.message : "Failed to change cluster field";
       await send({ phase: "error", error: message }).catch(() => {});
     } finally {
       remapInProgress = false;
@@ -93,7 +92,7 @@ export async function PATCH(request: Request) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
+      Connection: "keep-alive",
     },
   });
 }

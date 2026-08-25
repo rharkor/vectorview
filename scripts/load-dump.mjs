@@ -7,8 +7,8 @@
  */
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { createGunzip } from "node:zlib";
 import process from "node:process";
+import { createGunzip } from "node:zlib";
 import postgres from "postgres";
 
 const file = process.argv[2];
@@ -100,7 +100,8 @@ try {
   `;
   await sql`DROP TABLE dump_in`;
 
-  const [dimRow] = await sql`SELECT vector_dims(embedding) AS dims FROM items WHERE embedding IS NOT NULL LIMIT 1`;
+  const [dimRow] =
+    await sql`SELECT vector_dims(embedding) AS dims FROM items WHERE embedding IS NOT NULL LIMIT 1`;
   const dims = dimRow?.dims ?? null;
   if (dims && Number.isInteger(dims) && dims > 0 && dims <= 16000) {
     await sql.unsafe(`ALTER TABLE items ALTER COLUMN embedding TYPE vector(${dims})`);
@@ -144,7 +145,8 @@ try {
   await sql`ANALYZE items`.catch(() => {});
 
   const labels = {};
-  const distinct = await sql`SELECT DISTINCT cluster, payload->>'cluster' AS name FROM items WHERE cluster IS NOT NULL`;
+  const distinct =
+    await sql`SELECT DISTINCT cluster, payload->>'cluster' AS name FROM items WHERE cluster IS NOT NULL`;
   for (const row of distinct) {
     labels[String(row.cluster)] = row.name ?? String(row.cluster);
   }

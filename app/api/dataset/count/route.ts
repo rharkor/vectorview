@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-import {
-  connectSourceReadOnly,
-  estimatedTableRows,
-  validatePostgresUrl,
-} from "@/lib/source";
+import { connectSourceReadOnly, estimatedTableRows, validatePostgresUrl } from "@/lib/source";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -46,9 +42,9 @@ export async function POST(request: Request) {
 
     const [row] = await source<{ count: string; emb_count: string | null }[]>`
       SELECT count(*)::text AS count,
-             ${embeddingColumn
-               ? source`count(${source(embeddingColumn)})::text`
-               : source`NULL`} AS emb_count
+             ${
+               embeddingColumn ? source`count(${source(embeddingColumn)})::text` : source`NULL`
+} AS emb_count
       FROM ${source(schema)}.${source(table)}
     `;
     return Response.json({

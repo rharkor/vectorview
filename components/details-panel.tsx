@@ -131,10 +131,7 @@ export function DetailsPanel() {
         }
         setSelectedPoint(pointBody.point ?? null);
         if (neighborsRes.ok) {
-          setNeighbors(
-            neighborsBody.neighbors ?? [],
-            neighborsBody.outsideNeighbors ?? [],
-          );
+          setNeighbors(neighborsBody.neighbors ?? [], neighborsBody.outsideNeighbors ?? []);
         } else {
           setNeighbors([]);
           toast.error(neighborsBody.error ?? "Failed to load neighbors");
@@ -151,9 +148,7 @@ export function DetailsPanel() {
     };
   }, [selectedId, setSelectedPoint, setNeighbors]);
 
-  const entries = point
-    ? Object.entries(point).filter(([key]) => !HIDDEN_KEYS.has(key))
-    : [];
+  const entries = point ? Object.entries(point).filter(([key]) => !HIDDEN_KEYS.has(key)) : [];
 
   const title = point?.label
     ? String(point.label)
@@ -212,13 +207,8 @@ export function DetailsPanel() {
 
               {point.payload !== undefined && point.payload !== null && (
                 <div className="mt-3">
-                  <div className="mb-1.5 text-xs font-medium text-muted-foreground">
-                    payload
-                  </div>
-                  <CodeBlock
-                    code={JSON.stringify(point.payload, null, 2)}
-                    lang="json"
-                  />
+                  <div className="mb-1.5 text-xs font-medium text-muted-foreground">payload</div>
+                  <CodeBlock code={JSON.stringify(point.payload, null, 2)} lang="json" />
                 </div>
               )}
 
@@ -231,11 +221,7 @@ export function DetailsPanel() {
                 empty="No neighbors found."
                 onPick={(n) => {
                   if (typeof n.x === "number" && typeof n.y === "number") {
-                    const pos: [number, number, number] = [
-                      n.x,
-                      n.y,
-                      (n.z as number) ?? 0,
-                    ];
+                    const pos: [number, number, number] = [n.x, n.y, (n.z as number) ?? 0];
                     flyTo(...pos);
                     selectPoint(rowId(n), pos);
                   } else {
@@ -253,11 +239,7 @@ export function DetailsPanel() {
                 empty="No neighbors outside this cluster."
                 onPick={(n) => {
                   if (typeof n.x === "number" && typeof n.y === "number") {
-                    const pos: [number, number, number] = [
-                      n.x,
-                      n.y,
-                      (n.z as number) ?? 0,
-                    ];
+                    const pos: [number, number, number] = [n.x, n.y, (n.z as number) ?? 0];
                     flyTo(...pos);
                     selectPoint(rowId(n), pos);
                   } else {

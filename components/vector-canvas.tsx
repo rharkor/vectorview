@@ -9,8 +9,8 @@ import {
   OrthographicCamera,
   PerspectiveCamera,
 } from "@react-three/drei";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import type { RootState } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { tableFromIPC } from "apache-arrow";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -18,14 +18,14 @@ import * as THREE from "three";
 import {
   BackgroundWeb,
   HoverWeb,
-  SelectionWeb,
   makePointsGeometry,
   makePointsMaterial,
+  SelectionWeb,
   setPicking,
   syncPointUniforms,
 } from "@/components/vector-web";
 import { buildClusterColors, clusterColor } from "@/lib/colors";
-import { buildGrid, queryRadius, type GridIndex } from "@/lib/spatial";
+import { buildGrid, type GridIndex, queryRadius } from "@/lib/spatial";
 import { isClusterVisible, useVectorStore } from "@/lib/store";
 
 type OrbitControlsImpl = React.ComponentRef<typeof OrbitControls>;
@@ -87,6 +87,7 @@ function CameraRig({
   const cy = center[1];
   const cz = center[2];
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rebind camera when switching 2D/3D
   useEffect(() => {
     if (cameraRef.current) {
       set({ camera: cameraRef.current as never });
@@ -113,8 +114,7 @@ function CameraRig({
         ortho.updateProjectionMatrix();
       } else {
         const persp = cam as THREE.PerspectiveCamera;
-        const dist =
-          (extent / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)) * 1.3;
+        const dist = (extent / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)) * 1.3;
         persp.position.set(cx, cy - dist * 0.4, cz + dist);
       }
       controls.update();
@@ -151,8 +151,7 @@ function CameraRig({
         ortho.updateProjectionMatrix();
       } else {
         const persp = cam as THREE.PerspectiveCamera;
-        const dist =
-          (ext / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)) * 1.3;
+        const dist = (ext / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)) * 1.3;
         FLY_POS.set(dest.x, dest.y - dist * 0.4, dest.z + dist);
         persp.position.lerp(FLY_POS, 0.12);
       }
@@ -167,7 +166,12 @@ function CameraRig({
   return null;
 }
 
-function unprojectCursor(camera: THREE.Camera, size: { width: number; height: number }, cssX: number, cssY: number) {
+function unprojectCursor(
+  camera: THREE.Camera,
+  size: { width: number; height: number },
+  cssX: number,
+  cssY: number,
+) {
   NDC.set((cssX / size.width) * 2 - 1, -(cssY / size.height) * 2 + 1, 0);
   WORLD.copy(NDC).unproject(camera);
   return WORLD;
@@ -315,10 +319,7 @@ export function VectorCanvas() {
 
         const table = tableFromIPC(concatChunks(chunks, received));
         const ids = Array.from(table.getChild("id")!.toArray() as ArrayLike<string>, String);
-        const labels = Array.from(
-          table.getChild("label")!.toArray() as ArrayLike<string>,
-          String,
-        );
+        const labels = Array.from(table.getChild("label")!.toArray() as ArrayLike<string>, String);
         const xs = table.getChild("x")!.toArray() as Float32Array;
         const ys = table.getChild("y")!.toArray() as Float32Array;
         const zs = table.getChild("z")!.toArray() as Float32Array;
@@ -329,9 +330,14 @@ export function VectorCanvas() {
         const colors = new Uint8Array(n * 4);
         const clusterColors = buildClusterColors(clusters, n);
 
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        let minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity;
         for (let i = 0; i < n; i++) {
-          const x = xs[i], y = ys[i], z = zs[i];
+          const x = xs[i],
+            y = ys[i],
+            z = zs[i];
           positions[i * 3] = x;
           positions[i * 3 + 1] = y;
           positions[i * 3 + 2] = z;
@@ -377,6 +383,7 @@ export function VectorCanvas() {
     [setCloud, setError, setLoading],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reload after import/remap
   useEffect(() => {
     const handle = setTimeout(() => load(sample), sample === 1 ? 0 : 400);
     return () => clearTimeout(handle);
@@ -413,9 +420,7 @@ export function VectorCanvas() {
 
   useEffect(() => {
     if (!geometry || !cloud) return;
-    const highlight = geometry.getAttribute("aHighlight") as
-      | THREE.BufferAttribute
-      | undefined;
+    const highlight = geometry.getAttribute("aHighlight") as THREE.BufferAttribute | undefined;
     if (!highlight) return;
     const hasSearch = highlightedIds.size > 0;
     for (let i = 0; i < cloud.count; i++) {
@@ -480,9 +485,7 @@ export function VectorCanvas() {
       const world = unprojectCursor(camera, state.size, cssX, cssY);
       let seedX = world.x;
       let seedY = world.y;
-      let seedZ = (camera as THREE.OrthographicCamera).isOrthographicCamera
-        ? 0
-        : world.z;
+      let seedZ = (camera as THREE.OrthographicCamera).isOrthographicCamera ? 0 : world.z;
 
       const gpu = gpuPick(state, cssX, cssY);
       if (gpu >= 0) {
@@ -491,8 +494,7 @@ export function VectorCanvas() {
         seedZ = cloud.positions[gpu * 3 + 2];
       }
 
-      const visible = (idx: number) =>
-        isClusterVisible(hiddenClusters, cloud.clusters[idx]);
+      const visible = (idx: number) => isClusterVisible(hiddenClusters, cloud.clusters[idx]);
       const nearby = (
         index
           ? queryRadius(index, seedX, seedY, seedZ, radius)
@@ -608,8 +610,7 @@ export function VectorCanvas() {
     <div
       className="absolute inset-0"
       style={{
-        background:
-          "radial-gradient(ellipse at 50% 38%, #101033 0%, #07071a 42%, #03030c 78%)",
+        background: "radial-gradient(ellipse at 50% 38%, #101033 0%, #07071a 42%, #03030c 78%)",
       }}
     >
       <Canvas
@@ -627,12 +628,7 @@ export function VectorCanvas() {
       >
         {viewMode === "2d" ? (
           <>
-            <OrthographicCamera
-              ref={cameraRef as never}
-              makeDefault
-              near={0.1}
-              far={10000}
-            />
+            <OrthographicCamera ref={cameraRef as never} makeDefault near={0.1} far={10000} />
             <MapControls
               ref={controlsRef as never}
               makeDefault
@@ -671,9 +667,7 @@ export function VectorCanvas() {
           cameraRef={cameraRef}
         />
 
-        {geometry && (
-          <points geometry={geometry} material={pointMaterial} frustumCulled={false} />
-        )}
+        {geometry && <points geometry={geometry} material={pointMaterial} frustumCulled={false} />}
         <group ref={overlaysRef}>
           {cloud && extent > 0 && (
             <BackgroundWeb

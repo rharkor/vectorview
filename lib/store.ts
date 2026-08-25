@@ -166,14 +166,10 @@ export const useVectorStore = create<VectorState>((set, get) => ({
       searchResults,
       searchQuery,
       focusedCluster: null,
-      highlightedIds: new Set(
-        searchResults.map((r) => String(r.source_id ?? r.id)),
-      ),
+      highlightedIds: new Set(searchResults.map((r) => String(r.source_id ?? r.id))),
     }),
-  clearSearch: () =>
-    set({ searchResults: [], searchQuery: "", highlightedIds: new Set<string>() }),
-  flyTo: (x, y, z, extent) =>
-    set({ flyTarget: { x, y, z, extent, nonce: Date.now() } }),
+  clearSearch: () => set({ searchResults: [], searchQuery: "", highlightedIds: new Set<string>() }),
+  flyTo: (x, y, z, extent) => set({ flyTarget: { x, y, z, extent, nonce: Date.now() } }),
   setFps: (fps) => set({ fps }),
   setToken: (token) => set({ token }),
   setTokenDialogOpen: (tokenDialogOpen) => set({ tokenDialogOpen }),
@@ -184,8 +180,7 @@ export const useVectorStore = create<VectorState>((set, get) => ({
       const next = new Set(s.hiddenClusters);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      const focusedCluster =
-        next.has(id) && s.focusedCluster === id ? null : s.focusedCluster;
+      const focusedCluster = next.has(id) && s.focusedCluster === id ? null : s.focusedCluster;
       return { hiddenClusters: next, focusedCluster };
     }),
   showAllClusters: () => set({ hiddenClusters: new Set<number>() }),
@@ -245,6 +240,5 @@ export const useVectorStore = create<VectorState>((set, get) => ({
 }));
 
 if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
-  (window as unknown as { __vectorStore: typeof useVectorStore }).__vectorStore =
-    useVectorStore;
+  (window as unknown as { __vectorStore: typeof useVectorStore }).__vectorStore = useVectorStore;
 }

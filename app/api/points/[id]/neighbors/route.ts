@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 
 import { config } from "@/lib/config";
 import { getDb, hasDatabase } from "@/lib/db";
@@ -6,19 +6,13 @@ import { getScalarColumns, getTableMeta, toJsonSafe } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!hasDatabase()) {
     return Response.json({ error: "DATABASE_URL is not configured." }, { status: 503 });
   }
 
   const { id } = await params;
-  const k = Math.min(
-    100,
-    Math.max(1, Number(request.nextUrl.searchParams.get("k") ?? "20") || 20),
-  );
+  const k = Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get("k") ?? "20") || 20));
 
   try {
     const sql = getDb();
@@ -54,7 +48,7 @@ export async function GET(
       LIMIT ${k}
     `;
 
-    let outsideNeighbors: typeof neighbors = [];
+    let outsideNeighbors: Array<(typeof neighbors)[number]> = [];
     if (hasCluster) {
       const [self] = await sql<{ cluster: number | null }[]>`
         SELECT ${sql(config.clusterColumn)} AS cluster

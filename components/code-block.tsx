@@ -30,6 +30,7 @@ export function CodeBlock({ code, lang = "json" }: { code: string; lang?: string
   return (
     <div
       className="code-scroll h-[32rem] max-h-[60vh] overflow-auto rounded-md border border-border text-xs [&_pre]:m-0 [&_pre]:min-h-full [&_pre]:bg-black/50! [&_pre]:p-4"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki highlights the local code string
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

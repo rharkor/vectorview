@@ -43,9 +43,7 @@ export function toJsonSafe<T>(value: T): T {
   }
   if (Array.isArray(value)) return value.map(toJsonSafe) as T;
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, toJsonSafe(v)]),
-    ) as T;
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, toJsonSafe(v)])) as T;
   }
   return value;
 }

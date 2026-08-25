@@ -51,9 +51,9 @@ export function TokenDialog() {
             Vercel AI Gateway token
           </DialogTitle>
           <DialogDescription>
-            Semantic search embeds your query through the Vercel AI Gateway. Paste a
-            gateway token to enable it. The token is stored only in your
-            browser&apos;s localStorage and sent with search requests.
+            Semantic search embeds your query through the Vercel AI Gateway. Paste a gateway token
+            to enable it. The token is stored only in your browser&apos;s localStorage and sent with
+            search requests.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2 py-2">

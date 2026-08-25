@@ -1,14 +1,14 @@
 import { tableFromArrays, tableToIPC } from "apache-arrow";
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 
 import { config } from "@/lib/config";
 import { getDb, hasDatabase } from "@/lib/db";
 import {
   getCachedCount,
   getCachedPoints,
+  type PointsCacheEntry,
   setCachedCount,
   setCachedPoints,
-  type PointsCacheEntry,
 } from "@/lib/points-cache";
 import { getTableMeta } from "@/lib/schema";
 
@@ -68,15 +68,17 @@ export async function GET(request: NextRequest) {
     const subsample = total > 0 && want < total;
     const threshold = Math.max(1, Math.round((want / Math.max(total, 1)) * SAMPLE_BUCKETS));
 
-    const clusterSelect = hasCluster
-      ? sql`${sql(config.clusterColumn)}`
-      : sql`-1`;
+    const clusterSelect = hasCluster ? sql`${sql(config.clusterColumn)}` : sql`-1`;
     const filters = [
       sql`x IS NOT NULL`,
       ...(subsample
-        ? [sql`abs(hashtextextended(${sql(config.idColumn)}::text, 42)) % ${SAMPLE_BUCKETS} < ${threshold}`]
+        ? [
+            sql`abs(hashtextextended(${sql(config.idColumn)}::text, 42)) % ${SAMPLE_BUCKETS} < ${threshold}`,
+          ]
         : []),
-      ...(hasBbox ? [sql`x BETWEEN ${bbox[0]} AND ${bbox[2]} AND y BETWEEN ${bbox[1]} AND ${bbox[3]}`] : []),
+      ...(hasBbox
+        ? [sql`x BETWEEN ${bbox[0]} AND ${bbox[2]} AND y BETWEEN ${bbox[1]} AND ${bbox[3]}`]
+        : []),
     ];
     const where = filters.reduce((acc, f) => sql`${acc} AND ${f}`);
 
@@ -108,7 +110,14 @@ export async function GET(request: NextRequest) {
       labels[i] = String(row[5] ?? "");
     }
 
-    const table = tableFromArrays({ id: ids, x: xs, y: ys, z: zs, cluster: clusters, label: labels });
+    const table = tableFromArrays({
+      id: ids,
+      x: xs,
+      y: ys,
+      z: zs,
+      cluster: clusters,
+      label: labels,
+    });
     const entry: PointsCacheEntry = {
       ipc: tableToIPC(table, "stream"),
       total,

@@ -32,15 +32,7 @@ const CLUSTER_NAME_HINTS = new Set([
 ]);
 const ID_TYPES = new Set(["int2", "int4", "int8", "uuid", "text", "varchar"]);
 const FLOAT_TYPES = new Set(["float4", "float8", "numeric"]);
-const LABEL_NAME_HINTS = new Set([
-  "name",
-  "title",
-  "label",
-  "handle",
-  "slug",
-  "username",
-  "email",
-]);
+const LABEL_NAME_HINTS = new Set(["name", "title", "label", "handle", "slug", "username", "email"]);
 
 export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
@@ -135,9 +127,7 @@ export async function POST(request: Request) {
           (c) => CLUSTER_NAME_HINTS.has(c.name.toLowerCase()) && c.udt !== "vector",
         );
         const labelCol = cols.find(
-          (c) =>
-            LABEL_NAME_HINTS.has(c.name.toLowerCase()) &&
-            ["text", "varchar"].includes(c.udt),
+          (c) => LABEL_NAME_HINTS.has(c.name.toLowerCase()) && ["text", "varchar"].includes(c.udt),
         );
         const coordCol = (name: string) =>
           cols.find((c) => c.name.toLowerCase() === name && FLOAT_TYPES.has(c.udt));
@@ -160,7 +150,10 @@ export async function POST(request: Request) {
           },
         };
       })
-      .sort((a, b) => Number(b.hasEmbeddings) - Number(a.hasEmbeddings) || b.estimatedRows - a.estimatedRows);
+      .sort(
+        (a, b) =>
+          Number(b.hasEmbeddings) - Number(a.hasEmbeddings) || b.estimatedRows - a.estimatedRows,
+      );
 
     return Response.json({
       source: redactUrl(url),

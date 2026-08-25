@@ -21,8 +21,7 @@ function oklchToRgb(l: number, c: number, h: number): [number, number, number] {
   const b_ = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.707614701 * s3;
 
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
-  const toSrgb = (v: number) =>
-    v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
+  const toSrgb = (v: number) => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
 
   return [
     Math.round(clamp(toSrgb(r)) * 255),
@@ -60,10 +59,7 @@ function colorForSizeRank(rank: number): [number, number, number] {
 }
 
 /** Color map keyed by cluster id. Largest clusters get the most separated hues. */
-export function buildClusterColors(
-  clusters: ArrayLike<number>,
-  count: number,
-): ClusterColorMap {
+export function buildClusterColors(clusters: ArrayLike<number>, count: number): ClusterColorMap {
   const counts = new Map<number, number>();
   for (let i = 0; i < count; i++) {
     const id = clusters[i];
@@ -78,26 +74,17 @@ export function buildClusterColors(
   return colors;
 }
 
-export function clusterColor(
-  cluster: number,
-  colors?: ClusterColorMap,
-): [number, number, number] {
+export function clusterColor(cluster: number, colors?: ClusterColorMap): [number, number, number] {
   if (cluster < 0) return UNCLUSTERED_COLOR;
   return colors?.[String(cluster)] ?? CLUSTER_PALETTE[cluster % PALETTE_SIZE];
 }
 
-export function clusterRgbCss(
-  cluster: number,
-  colors?: ClusterColorMap,
-): string {
+export function clusterRgbCss(cluster: number, colors?: ClusterColorMap): string {
   const [r, g, b] = clusterColor(cluster, colors);
   return `rgb(${r} ${g} ${b})`;
 }
 
-export function clusterLabel(
-  cluster: number,
-  labels?: Record<string, string>,
-): string {
+export function clusterLabel(cluster: number, labels?: Record<string, string>): string {
   if (cluster < 0) return "Unclustered";
   return labels?.[String(cluster)] ?? String(cluster);
 }

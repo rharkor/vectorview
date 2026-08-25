@@ -4,10 +4,7 @@ import { getScalarColumns, toJsonSafe } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!hasDatabase()) {
     return Response.json({ error: "DATABASE_URL is not configured." }, { status: 503 });
   }

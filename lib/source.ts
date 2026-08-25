@@ -20,10 +20,7 @@ export function logImport(event: string, detail?: unknown) {
  * `options` is a startup parameter, so every pooled connection is read-only
  * regardless of which queries run later.
  */
-export function connectSourceReadOnly(
-  url: string,
-  opts: SourceConnectOptions = {},
-): postgres.Sql {
+export function connectSourceReadOnly(url: string, opts: SourceConnectOptions = {}): postgres.Sql {
   const statementTimeoutMs = opts.statementTimeoutMs ?? 60_000;
   const idleTimeout = opts.idleTimeout ?? 30;
   const connectTimeout = opts.connectTimeout ?? 30;

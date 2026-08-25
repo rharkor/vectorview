@@ -40,11 +40,7 @@ let importInProgress = false;
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(
-        new Error(
-          `${label} timed out after ${ms}ms — the kube port-forward may have reset`,
-        ),
-      );
+      reject(new Error(`${label} timed out after ${ms}ms — the kube port-forward may have reset`));
     }, ms);
     promise.then(
       (value) => {
@@ -148,7 +144,7 @@ export async function POST(request: Request) {
             .map((c) => c.column)
         : [];
       const embCol = cols.find((c) => c.column === body.embeddingColumn);
-      if (!embCol || embCol.udt !== "vector") {
+      if (embCol?.udt !== "vector") {
         throw new Error(`Column "${body.embeddingColumn}" is not a pgvector vector column`);
       }
 
@@ -188,9 +184,7 @@ export async function POST(request: Request) {
         selectCols.push(source`${source(body.xColumn as string)}::float8 AS __x`);
         selectCols.push(source`${source(body.yColumn as string)}::float8 AS __y`);
         selectCols.push(
-          body.zColumn
-            ? source`${source(body.zColumn)}::float8 AS __z`
-            : source`0::float8 AS __z`,
+          body.zColumn ? source`${source(body.zColumn)}::float8 AS __z` : source`0::float8 AS __z`,
         );
       }
       const selectList = selectCols.reduce((a, b) => source`${a}, ${b}`);
@@ -210,11 +204,24 @@ export async function POST(request: Request) {
       // transaction while we write locally, and distant hosts (or PgBouncer)
       // close that session after the first chunk — which looked like a hang
       // at 400 rows.
-      const fetchPage = async (after: unknown) => {
-        const where =
+      const fetchPage = async (after?: string | number | bigint) => {
+        const pageQuery = () =>
           after === undefined
-            ? source`${source(body.embeddingColumn)} IS NOT NULL`
-            : source`${source(body.embeddingColumn)} IS NOT NULL AND ${source(body.idColumn)} > ${after}`;
+            ? source<Record<string, unknown>[]>`
+                SELECT ${selectList}
+                FROM ${source(body.schema)}.${source(body.table)}
+                WHERE ${source(body.embeddingColumn)} IS NOT NULL
+                ORDER BY ${source(body.idColumn)}
+                LIMIT ${pageSize}
+              `
+            : source<Record<string, unknown>[]>`
+                SELECT ${selectList}
+                FROM ${source(body.schema)}.${source(body.table)}
+                WHERE ${source(body.embeddingColumn)} IS NOT NULL
+                  AND ${source(body.idColumn)} > ${String(after)}
+                ORDER BY ${source(body.idColumn)}
+                LIMIT ${pageSize}
+              `;
         let lastError: unknown;
         for (let attempt = 1; attempt <= 3; attempt++) {
           logImport("source-fetch:start", {
@@ -225,13 +232,7 @@ export async function POST(request: Request) {
           const started = Date.now();
           try {
             const rows = await withTimeout(
-              source<Record<string, unknown>[]>`
-                SELECT ${selectList}
-                FROM ${source(body.schema)}.${source(body.table)}
-                WHERE ${where}
-                ORDER BY ${source(body.idColumn)}
-                LIMIT ${pageSize}
-              `,
+              pageQuery(),
               fetchTimeoutMs,
               `source fetch after ${String(after ?? "start")}`,
             );
@@ -315,7 +316,7 @@ export async function POST(request: Request) {
       const prefetch = connections >= 2;
       let page = await fetchPage(undefined);
       while (page.length > 0) {
-        const after = page[page.length - 1].__cursor_id;
+        const after = page[page.length - 1].__cursor_id as string | number | bigint;
         const nextPage = prefetch ? fetchPage(after) : null;
         await send({
           phase: "copying",
@@ -326,7 +327,12 @@ export async function POST(request: Request) {
         await writePage(page);
         copied += page.length;
         logImport("copy:progress", { copied, lastId: after, prefetch });
-        await send({ phase: "copying", done: copied, total: estimatedTotal, message: "Fetching rows" });
+        await send({
+          phase: "copying",
+          done: copied,
+          total: estimatedTotal,
+          message: "Fetching rows",
+        });
         page = nextPage ? await nextPage : await fetchPage(after);
       }
       logImport("copy:no-more-rows", { copied });
@@ -345,9 +351,7 @@ export async function POST(request: Request) {
       const dims = dimRow?.dims ?? null;
       logImport("pin-embedding-dim", { dims });
       if (dims && Number.isInteger(dims) && dims > 0 && dims <= 16000) {
-        await sql.unsafe(
-          `ALTER TABLE items ALTER COLUMN embedding TYPE vector(${dims})`,
-        );
+        await sql.unsafe(`ALTER TABLE items ALTER COLUMN embedding TYPE vector(${dims})`);
       }
 
       // --- project (skip when source already had coordinates) ------------
