@@ -36,20 +36,25 @@ export async function POST(request: Request) {
       const scalarCols = await getScalarColumns(sql);
       const needle = query;
       const pattern = `%${needle.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+      const prefix = `${needle.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
       const results = await sql`
         SELECT ${sql(scalarCols)},
                0::float8 AS distance
         FROM ${sql(config.table)}
-        WHERE source_id = ${needle}
+        WHERE ${sql(config.idColumn)}::text ILIKE ${pattern}
            OR source_id ILIKE ${pattern}
-           OR COALESCE(label, '') ILIKE ${pattern}
-           OR ${sql(config.idColumn)}::text = ${needle}
+           OR label ILIKE ${pattern}
+           OR payload->>'name' ILIKE ${pattern}
+           OR payload->>'title' ILIKE ${pattern}
         ORDER BY
           CASE
             WHEN source_id = ${needle} THEN 0
             WHEN ${sql(config.idColumn)}::text = ${needle} THEN 1
-            WHEN source_id ILIKE ${needle + "%"} THEN 2
-            ELSE 3
+            WHEN label ILIKE ${needle} THEN 2
+            WHEN payload->>'name' ILIKE ${needle} THEN 2
+            WHEN payload->>'title' ILIKE ${needle} THEN 2
+            WHEN source_id ILIKE ${prefix} THEN 3
+            ELSE 4
           END
         LIMIT ${k}
       `;

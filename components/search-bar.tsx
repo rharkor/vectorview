@@ -100,7 +100,7 @@ export function SearchBar() {
               ? "bg-sky-500/80 text-white"
               : "text-muted-foreground hover:text-foreground"
           }`}
-          title="Match source id or label"
+          title="Match id or name"
         >
           <Hash className="size-3" />
           ID
@@ -142,7 +142,7 @@ export function SearchBar() {
         }}
         placeholder={
           mode === "id"
-            ? "Find a point by id or label…"
+            ? "Find a point by id or name…"
             : token
               ? "Semantic search across embeddings…"
               : "Add a gateway token for AI search"
